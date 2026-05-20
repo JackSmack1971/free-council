@@ -102,6 +102,51 @@ describe('Model Capabilities & Management Tests', () => {
       assert.strictEqual(result.coding, false);
       assert.strictEqual(result.structured_output, true);
     });
+
+    test('should normalize owl-alpha model with pdf capability', () => {
+      const rawModel: OpenRouterModelMetadata = {
+        id: 'openrouter/owl-alpha',
+        name: 'Owl Alpha',
+        description: 'Owl Alpha is a long-context model designed for analysis.',
+        context_length: 1048576,
+        architecture: {
+          modality: 'text->text',
+          input_modalities: ['text'],
+          output_modalities: ['text']
+        },
+        pricing: {
+          prompt: '0',
+          completion: '0'
+        },
+        supported_parameters: []
+      };
+
+      const result = CapabilityDetector.normalizeModel(rawModel);
+      assert.strictEqual(result.pdf_input, true);
+    });
+
+    test('should normalize nemotron-nano vision-language model with image/vision capabilities', () => {
+      const rawModel: OpenRouterModelMetadata = {
+        id: 'nvidia/nemotron-nano-12b-v2-vl:free',
+        name: 'NVIDIA: Nemotron Nano 12B VL (free)',
+        description: 'A vision-language model for multimodal reasoning.',
+        context_length: 8192,
+        architecture: {
+          modality: 'text+image->text',
+          input_modalities: ['text', 'image'],
+          output_modalities: ['text']
+        },
+        pricing: {
+          prompt: '0',
+          completion: '0'
+        },
+        supported_parameters: []
+      };
+
+      const result = CapabilityDetector.normalizeModel(rawModel);
+      assert.strictEqual(result.image_input, true);
+      assert.strictEqual(result.vision, true);
+    });
   });
 
   describe('ModelCardSummarizer.summarize', () => {

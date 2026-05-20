@@ -51,9 +51,19 @@ export const CapabilityDetector = {
     const pdf_input = 
       inputModalities.includes('file') || 
       description.toLowerCase().includes('pdf') || 
-      description.toLowerCase().includes('document input');
+      description.toLowerCase().includes('document input') ||
+      description.toLowerCase().includes('document parsing') ||
+      modelId.toLowerCase().includes('owl-alpha');
 
-    const image_input = inputModalities.includes('image');
+    const image_input = 
+      inputModalities.includes('image') ||
+      modelId.toLowerCase().includes('-vl') ||
+      modelId.toLowerCase().includes('vision') ||
+      modelId.toLowerCase().includes('multimodal') ||
+      name.toLowerCase().includes('vision') ||
+      name.toLowerCase().includes('multimodal') ||
+      description.toLowerCase().includes('multimodal') ||
+      description.toLowerCase().includes('vision');
     
     // features
     const tool_calling = supportedParams.includes('tools');
