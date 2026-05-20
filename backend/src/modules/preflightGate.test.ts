@@ -104,6 +104,10 @@ describe('PreflightGate Tests', () => {
     const excStmt = db.prepare('SELECT * FROM policy_exceptions WHERE session_id = ? AND violation_type = ?');
     const excRow = excStmt.get(sessionId, 'PRIVACY_DISCLOSURE_PENDING');
     assert.ok(excRow);
+
+    const telStmt = db.prepare('SELECT * FROM session_events WHERE session_id = ? AND event_type = ?');
+    const telRow = telStmt.get(sessionId, 'privacy_disclosure_pending');
+    assert.ok(telRow);
   });
 
   test('should return ZDR_REQUIRED_UNAVAILABLE if zdr is required but model does not support it', () => {

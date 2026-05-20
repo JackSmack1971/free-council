@@ -18,11 +18,11 @@ export interface QuotaInfo {
 }
 
 export const apiClient = {
-  async createSession(modelId: string): Promise<string> {
+  async createSession(modelId: string, mode: 'solo' | 'council'): Promise<string> {
     const res = await fetch(`${API_BASE}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelId, mode: 'solo' })
+      body: JSON.stringify({ modelId, mode })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -72,11 +72,11 @@ export const apiClient = {
     return body.sessions || [];
   },
 
-  async recordEvent(sessionId: string, eventType: string, apiCalls: number): Promise<void> {
+  async recordEvent(sessionId: string, eventType: string, apiCalls: number, synthesisRationale?: string): Promise<void> {
     const res = await fetch(`${API_BASE}/session/${sessionId}/event`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ eventType, apiCalls })
+      body: JSON.stringify({ eventType, apiCalls, synthesisRationale })
     });
     if (!res.ok) {
       console.warn('Failed to log telemetry event');
@@ -94,12 +94,34 @@ export const apiClient = {
     }
   },
 
+  async getConfig(): Promise<Record<string, string>> {
+    const res = await fetch(`${API_BASE}/config`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to fetch config: HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  async updateConfig(payload: { default_mode?: string; council_reevaluated_after_ts?: number; demoted_by_retention?: boolean }): Promise<void> {
+    const res = await fetch(`${API_BASE}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to update config: HTTP ${res.status}`);
+    }
+  },
+
   async dispatchStream(
     sessionId: string,
     messages: any[],
     settings: any,
     apiKey: string,
-    onToken: (token: string) => void
+    onToken: (token: string) => void,
+    onEvent?: (event: any) => void
   ): Promise<void> {
     const res = await fetch(`${API_BASE}/dispatch`, {
       method: 'POST',
@@ -140,8 +162,12 @@ export const apiClient = {
             if (parsed.error) {
               throw new Error(parsed.error);
             }
-            const text = parsed.choices?.[0]?.delta?.content || '';
-            onToken(text);
+            if (parsed.type) {
+              onEvent?.(parsed);
+            } else {
+              const text = parsed.choices?.[0]?.delta?.content || '';
+              onToken(text);
+            }
           } catch (e: any) {
             if (e.message) throw e;
           }

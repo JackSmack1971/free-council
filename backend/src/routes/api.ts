@@ -140,6 +140,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     res.setHeader('Connection', 'keep-alive');
 
     let assistantResponse = '';
+    let traceMetadata: any = null;
 
     await dispatchCouncilChat({
       sessionId,
@@ -155,8 +156,12 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
             if (dataStr === '[DONE]') continue;
             try {
               const parsed = JSON.parse(dataStr);
-              const content = parsed.choices?.[0]?.delta?.content || '';
-              assistantResponse += content;
+              if (parsed.type === 'trace') {
+                traceMetadata = parsed.trace;
+              } else {
+                const content = parsed.choices?.[0]?.delta?.content || '';
+                assistantResponse += content;
+              }
             } catch (e) {
               // Ignore
             }
@@ -170,7 +175,11 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       onComplete: () => {
         const updatedMessages = [
           ...messages,
-          { role: 'assistant', content: assistantResponse }
+          {
+            role: 'assistant',
+            content: assistantResponse,
+            ...(traceMetadata ? { trace: traceMetadata } : {})
+          }
         ];
         ConversationStore.saveConversation(sessionId, updatedMessages);
         res.end();
@@ -320,13 +329,14 @@ apiRouter.get('/sessions', (req: Request, res: Response) => {
 
 // POST /session/:id/event
 apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
-  const { eventType, apiCalls } = req.body;
+  const { eventType, apiCalls, synthesisRationale } = req.body;
   const sessionId = req.params.id;
   try {
     TelemetryEngine.record({
       session_id: sessionId,
       event_type: eventType,
       api_calls: apiCalls,
+      synthesis_rationale: synthesisRationale,
       ts: Date.now()
     });
     res.status(201).json({ success: true });

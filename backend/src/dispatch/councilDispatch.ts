@@ -80,10 +80,19 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
 
     // 6. PreflightGate Check
     const activeModelId = 'openrouter/free'; // Use fallback meta-LLM
+    const hasProviderLogged = plan.agents.some(a => {
+      const metadata = freeModels.find(m => m.modelId === a.modelId);
+      return metadata ? metadata.is_provider_logged : false;
+    });
+    const allFreeModels = plan.agents.every(a => {
+      const metadata = freeModels.find(m => m.modelId === a.modelId);
+      return metadata ? metadata.is_free : false;
+    });
+
     const preflightCtx: PreflightContext = {
       modelId: activeModelId,
-      isFreeModel: true,
-      isProviderLogged: false,
+      isFreeModel: allFreeModels,
+      isProviderLogged: hasProviderLogged,
       apiKeyPresent: !!apiKey && apiKey.trim().length > 0,
       freeLockEnabled: runSettings.freeLockEnabled !== false,
       activeAgentCount: plan.agents.length,

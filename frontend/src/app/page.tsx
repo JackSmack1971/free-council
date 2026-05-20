@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { localDB } from '../utils/db';
 import { apiClient, ModelInfo, QuotaInfo } from '../utils/api';
+import CouncilTrace from '../components/CouncilTrace';
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
@@ -26,18 +27,28 @@ export default function Home() {
   const [modelSettings, setModelSettings] = useState<Record<string, number | boolean | string>>({});
 
   // Chat States
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; content: string; trace?: any }[]>([]);
   const [inputPrompt, setInputPrompt] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isWaitingFirstToken, setIsWaitingFirstToken] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [activeProgress, setActiveProgress] = useState<{ role: string; status: 'generating' | 'evaluating' | 'completed' }[]>([]);
+  const [activeTrace, setActiveTrace] = useState<any>(null);
+  const [acknowledgedModels, setAcknowledgedModels] = useState<string[]>([]);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [pendingPrivacyModel, setPendingPrivacyModel] = useState<string>('');
   const [chatError, setChatError] = useState<string | null>(null);
+
+  // Routing Mode & Rollback States
+  const [routingMode, setRoutingMode] = useState<'solo' | 'council'>('council');
+  const [showRollbackBanner, setShowRollbackBanner] = useState(false);
 
   // Quota States
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
   // Preview Telemetry State
   const previewLoggedSessionRef = useRef<string | null>(null);
+  const lastUnsentMessagesRef = useRef<{ role: 'user' | 'assistant'; content: string; trace?: any }[]>([]);
 
   // Auto-scroll ref
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -54,6 +65,13 @@ export default function Home() {
     const interval = setInterval(fetchQuota, 5000);
     return () => clearInterval(interval);
   }, [mounted]);
+
+  // Poll config every 10 seconds
+  useEffect(() => {
+    if (!mounted) return;
+    const interval = setInterval(fetchConfig, 10000);
+    return () => clearInterval(interval);
+  }, [mounted, routingMode, activeSessionId]);
 
   // Load model-specific settings when model changes
   useEffect(() => {
@@ -88,6 +106,9 @@ export default function Home() {
     // Load Free Lock State
     const savedLock = await localDB.get<boolean>('free_lock_enabled');
     setFreeLockEnabled(savedLock !== null ? savedLock : true);
+
+    // Fetch Config
+    await fetchConfig();
 
     // Fetch Quota
     fetchQuota();
@@ -199,6 +220,42 @@ export default function Home() {
     }
   };
 
+  const fetchConfig = async () => {
+    try {
+      const configData = await apiClient.getConfig();
+      const defaultMode = configData.default_mode || 'council';
+      const demoted = configData.demoted_by_retention === 'true';
+      
+      setShowRollbackBanner(demoted);
+      
+      if (!activeSessionId) {
+        setRoutingMode(defaultMode as 'solo' | 'council');
+      } else if (demoted && routingMode === 'council') {
+        setRoutingMode('solo');
+      }
+    } catch (e) {
+      console.warn('Failed to load config:', e);
+    }
+  };
+
+  const reEnableCouncilMode = async () => {
+    try {
+      const now = Date.now();
+      await apiClient.updateConfig({
+        default_mode: 'council',
+        demoted_by_retention: false,
+        council_reevaluated_after_ts: now
+      });
+      setShowRollbackBanner(false);
+      setRoutingMode('council');
+      if (activeSessionId) {
+        startNewChat();
+      }
+    } catch (e) {
+      console.error('Failed to re-enable Council Mode:', e);
+    }
+  };
+
   const submitPrompt = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputPrompt.trim() || isStreaming) return;
@@ -208,6 +265,7 @@ export default function Home() {
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setInputPrompt('');
+    lastUnsentMessagesRef.current = updatedMessages;
 
     setIsStreaming(true);
     setIsWaitingFirstToken(true);
@@ -215,10 +273,12 @@ export default function Home() {
 
     let currentSessionId = activeSessionId;
 
+    let localTrace: any = null;
+
     try {
       // Create session on-demand if not already active
       if (!currentSessionId) {
-        currentSessionId = await apiClient.createSession(selectedModelId);
+        currentSessionId = await apiClient.createSession(selectedModelId, routingMode);
         setActiveSessionId(currentSessionId);
       }
 
@@ -226,6 +286,7 @@ export default function Home() {
       const settingsPayload = {
         ...modelSettings,
         freeLockEnabled,
+        privacyDisclosureAcknowledged: acknowledgedModels.includes(selectedModelId) || acknowledgedModels.includes('council_acknowledged')
       };
 
       await apiClient.dispatchStream(
@@ -236,12 +297,31 @@ export default function Home() {
         (token) => {
           setIsWaitingFirstToken(false);
           setStreamingText(prev => prev + token);
+        },
+        (event) => {
+          if (event.type === 'agent_progress') {
+            setActiveProgress(prev => {
+              const existing = prev.findIndex(p => p.role === event.role);
+              if (existing >= 0) {
+                const updated = [...prev];
+                updated[existing] = { role: event.role, status: event.status };
+                return updated;
+              } else {
+                return [...prev, { role: event.role, status: event.status }];
+              }
+            });
+          } else if (event.type === 'trace') {
+            localTrace = event.trace;
+            setActiveTrace(event.trace);
+          }
         }
       );
 
       // Finished stream
-      setMessages(prev => [...prev, { role: 'assistant', content: streamingText }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: streamingText, trace: localTrace }]);
       setStreamingText('');
+      setActiveProgress([]);
+      setActiveTrace(null);
       setIsStreaming(false);
 
       // Update sessions list & quota metrics
@@ -249,9 +329,92 @@ export default function Home() {
       fetchQuota();
     } catch (err: any) {
       console.error(err);
+      if (err.message && err.message.includes('PRIVACY_DISCLOSURE_PENDING')) {
+        setPendingPrivacyModel(selectedModelId || 'council_acknowledged');
+        setShowPrivacyModal(true);
+        setIsStreaming(false);
+        setIsWaitingFirstToken(false);
+        return;
+      }
       setChatError(err.message || 'An error occurred during completion dispatch.');
       setIsStreaming(false);
       setIsWaitingFirstToken(false);
+      setActiveProgress([]);
+      setActiveTrace(null);
+      fetchQuota();
+    }
+  };
+
+  const dismissPrivacyModal = async () => {
+    let currentSessionId = activeSessionId;
+    if (!currentSessionId) return;
+
+    try {
+      // Record 'privacy_disclosure_pending' resolved to 'acknowledged'
+      await apiClient.recordEvent(currentSessionId, 'privacy_disclosure_pending', 0, 'acknowledged');
+
+      // Update list of acknowledged models
+      const updatedAck = [...acknowledgedModels, pendingPrivacyModel];
+      setAcknowledgedModels(updatedAck);
+      setShowPrivacyModal(false);
+
+      // Auto-retry dispatch
+      setIsStreaming(true);
+      setIsWaitingFirstToken(true);
+      setStreamingText('');
+
+      const settingsPayload = {
+        ...modelSettings,
+        freeLockEnabled,
+        privacyDisclosureAcknowledged: true // Force true since we just acknowledged
+      };
+
+      let localTrace: any = null;
+
+      await apiClient.dispatchStream(
+        currentSessionId,
+        lastUnsentMessagesRef.current,
+        settingsPayload,
+        apiKey,
+        (token) => {
+          setIsWaitingFirstToken(false);
+          setStreamingText(prev => prev + token);
+        },
+        (event) => {
+          if (event.type === 'agent_progress') {
+            setActiveProgress(prev => {
+              const existing = prev.findIndex(p => p.role === event.role);
+              if (existing >= 0) {
+                const updated = [...prev];
+                updated[existing] = { role: event.role, status: event.status };
+                return updated;
+              } else {
+                return [...prev, { role: event.role, status: event.status }];
+              }
+            });
+          } else if (event.type === 'trace') {
+            localTrace = event.trace;
+            setActiveTrace(event.trace);
+          }
+        }
+      );
+
+      // Finished stream
+      setMessages(prev => [...prev, { role: 'assistant', content: streamingText, trace: localTrace }]);
+      setStreamingText('');
+      setActiveProgress([]);
+      setActiveTrace(null);
+      setIsStreaming(false);
+
+      fetchSessions();
+      fetchQuota();
+    } catch (err: any) {
+      console.error(err);
+      setChatError(err.message || 'An error occurred during completion dispatch.');
+      setIsStreaming(false);
+      setIsWaitingFirstToken(false);
+      setActiveProgress([]);
+      setActiveTrace(null);
       fetchQuota();
     }
   };
@@ -402,6 +565,25 @@ export default function Home() {
             <span>Free-only lock is OFF — paid models may incur charges</span>
           </div>
         )}
+        {/* Low-retention Rollback Banner */}
+        {showRollbackBanner && (
+          <div id="low-retention-banner" className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5 text-xs text-amber-400 font-semibold flex items-center justify-between animate-fade-in">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 shrink-0 animate-pulse text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>Council routing has low retention — Solo Mode is now default.</span>
+            </div>
+            <button
+              id="re-enable-council-btn"
+              type="button"
+              onClick={reEnableCouncilMode}
+              className="px-3 py-1 rounded bg-amber-500 text-neutral-950 font-bold hover:bg-amber-400 active:scale-95 transition-all"
+            >
+              Re-enable Council Mode
+            </button>
+          </div>
+        )}
 
         {/* Top Navigation Bar */}
         <header className="h-14 border-b border-neutral-800 flex items-center justify-between px-6 bg-neutral-900/20 backdrop-blur-md">
@@ -426,6 +608,42 @@ export default function Home() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
+            </div>
+
+            {/* Mode Selection Segmented Control */}
+            <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-lg border border-neutral-800 ml-2">
+              <button
+                type="button"
+                id="mode-solo-btn"
+                onClick={() => {
+                  if (isStreaming) return;
+                  setRoutingMode('solo');
+                  if (activeSessionId) startNewChat();
+                }}
+                className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${
+                  routingMode === 'solo'
+                    ? 'bg-violet-600 text-white shadow'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                Solo Mode
+              </button>
+              <button
+                type="button"
+                id="mode-council-btn"
+                onClick={() => {
+                  if (isStreaming) return;
+                  setRoutingMode('council');
+                  if (activeSessionId) startNewChat();
+                }}
+                className={`px-3 py-1 rounded-md text-xs font-bold transition-all ${
+                  routingMode === 'council'
+                    ? 'bg-violet-600 text-white shadow'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                Council Mode
+              </button>
             </div>
 
             {/* Model capability badges */}
@@ -525,6 +743,9 @@ export default function Home() {
                   m.role === 'user' ? 'bg-violet-500/10 text-neutral-200' : 'bg-neutral-900/40 text-neutral-300 border border-neutral-800'
                 }`}>
                   <p className="whitespace-pre-wrap">{m.content}</p>
+                  {m.role === 'assistant' && m.trace && (
+                    <CouncilTrace trace={m.trace} />
+                  )}
                 </div>
               </div>
             ))
@@ -536,15 +757,44 @@ export default function Home() {
               <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-semibold bg-neutral-800 text-neutral-300 select-none">
                 A
               </div>
-              <div className="p-4 rounded-xl text-sm leading-relaxed bg-neutral-900/40 text-neutral-300 border border-neutral-800 min-w-[80px]">
-                {isWaitingFirstToken ? (
-                  <div className="flex items-center gap-1.5 py-1">
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <div className="flex flex-col gap-2 w-full">
+                <div className="p-4 rounded-xl text-sm leading-relaxed bg-neutral-900/40 text-neutral-300 border border-neutral-800 min-w-[80px]">
+                  {isWaitingFirstToken ? (
+                    <div className="flex items-center gap-1.5 py-1">
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-neutral-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap">{streamingText}</p>
+                  )}
+                </div>
+
+                {/* Render active progress if available */}
+                {activeProgress.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {activeProgress.map((p, pIdx) => (
+                      <span
+                        key={pIdx}
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1.5 border ${
+                          p.status === 'generating'
+                            ? 'bg-blue-950/20 text-blue-400 border-blue-900/30'
+                            : p.status === 'evaluating'
+                            ? 'bg-amber-950/20 text-amber-400 border-amber-900/30'
+                            : 'bg-emerald-950/20 text-emerald-400 border-emerald-900/30'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          p.status === 'generating'
+                            ? 'bg-blue-400 animate-pulse'
+                            : p.status === 'evaluating'
+                            ? 'bg-amber-400 animate-spin border border-t-transparent'
+                            : 'bg-emerald-400'
+                        }`} />
+                        {p.role}: {p.status}
+                      </span>
+                    ))}
                   </div>
-                ) : (
-                  <p className="whitespace-pre-wrap">{streamingText}</p>
                 )}
               </div>
             </div>
@@ -806,6 +1056,51 @@ export default function Home() {
                 className="px-5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-neutral-800 disabled:text-neutral-500 text-xs font-bold text-white transition-colors"
               >
                 Validate & Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 5. Privacy & Logging Disclosure Modal */}
+      {showPrivacyModal && (
+        <div id="privacy-disclosure-modal" className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-neutral-900 border border-amber-500/20 rounded-2xl max-w-md w-full p-6 shadow-[0_0_50px_rgba(245,158,11,0.1)] space-y-5 transform scale-100 transition-transform">
+            
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-amber-500/10 rounded-xl text-amber-500 shrink-0">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-md font-bold text-neutral-100 uppercase tracking-wide">
+                  Privacy Disclosure
+                </h2>
+                <p className="text-sm text-neutral-300 leading-relaxed font-medium">
+                  This model may log prompts and completions per provider policy.
+                </p>
+              </div>
+            </div>
+
+            <div className="text-xs text-neutral-500 leading-relaxed bg-neutral-950/50 p-3 rounded-lg border border-neutral-800/50">
+              By proceeding, you acknowledge that your inputs and outputs are processed subject to the model provider's standard policy terms. This warning is displayed once per session.
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowPrivacyModal(false)}
+                className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-750 text-xs font-bold text-neutral-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                id="privacy-dismiss-btn"
+                type="button"
+                onClick={dismissPrivacyModal}
+                className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold transition-all shadow-[0_2px_10px_rgba(245,158,11,0.2)] hover:shadow-[0_4px_15px_rgba(245,158,11,0.3)] active:scale-95"
+              >
+                Acknowledge & Proceed
               </button>
             </div>
 

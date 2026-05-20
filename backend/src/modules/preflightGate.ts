@@ -71,6 +71,11 @@ export const PreflightGate = {
 
     // 3. PRIVACY_DISCLOSURE_PENDING check
     if (context.isProviderLogged && !context.privacyDisclosureAcknowledged) {
+      TelemetryEngine.record({
+        session_id: context.sessionId,
+        event_type: 'privacy_disclosure_pending',
+        ts: Date.now()
+      });
       logException('PRIVACY_DISCLOSURE_PENDING', context.modelId, 'acknowledged', context.sessionId);
       return { allowed: false, violation: 'PRIVACY_DISCLOSURE_PENDING' };
     }
