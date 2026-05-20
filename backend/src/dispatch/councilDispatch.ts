@@ -105,7 +105,13 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     const freeModels = ModelPoolManager.getFreeModels();
     const k = runSettings.proposerCount || 3;
     const containsUpload = !!runSettings.containsUpload;
-    const plan = await RouterAgent.sampleAgents(query, freeModels, k, apiKey, containsUpload);
+    const freeLockEnabled = runSettings.freeLockEnabled !== false;
+    const budgetEscalated = !!runSettings.budgetEscalated;
+    const plan = await RouterAgent.sampleAgents(
+      query, freeModels, k, apiKey, containsUpload,
+      effort, promptClass === 'complex' ? 'non_trivial' : 'simple',
+      freeLockEnabled, budgetEscalated
+    );
     plan.reasoningEffort = effort as 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 
     // Emit plan event (budget preview before dispatch)
@@ -187,17 +193,18 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       }
     }
 
-    // 10. Emit routed_to_council telemetry
-    TelemetryEngine.record({
-      session_id: sessionId,
-      event_type: 'routed_to_council',
-      agent_count: plan.agents.length,
-      api_calls: plan.totalApiCalls,
-      ts: Date.now()
-    });
+    // 10. Determine execution mode and emit pre-dispatch telemetry
+    const executionMode = plan.executionMode || 'goa_lite';
 
-    // 11. Execute GoA-lite via AgentOrchestrator
-    const generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId);
+    // 11. Execute via appropriate orchestrator method
+    let generator: AsyncIterableIterator<AgentResult>;
+    if (executionMode === 'goa_moa_hybrid') {
+      // Extract attachments context from enrichedQuery for aggregator
+      const attachmentsContext = containsUpload ? enrichedQuery : '';
+      generator = AgentOrchestrator.executeGoAMoAHybrid(plan, enrichedQuery, apiKey, sessionId, attachmentsContext);
+    } else {
+      generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId);
+    }
 
     let primaryResult: AgentResult | null = null;
     const completedResults: AgentResult[] = [];
@@ -280,7 +287,7 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       edgeMatrix = JSON.parse(row.edge_matrix_json);
     }
 
-    // Emit trace event
+    // Emit trace event (includes MoA info when applicable)
     const allResults = finalResults.length > 0 ? finalResults : completedResults;
     const traceInfo = {
       type: 'trace',
@@ -295,7 +302,16 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
         })),
         samplingRationale: plan.samplingRationale,
         totalApiCalls: plan.totalApiCalls,
-        edgeMatrix
+        edgeMatrix,
+        executionMode,
+        moaConfig: plan.moaConfig,
+        // Fetch synthesis rationale from latest session_events row
+        synthesisRationale: (() => {
+          try {
+            const srRow = db.prepare('SELECT synthesis_rationale FROM session_events WHERE session_id = ? AND synthesis_rationale IS NOT NULL ORDER BY ts DESC LIMIT 1').get(sessionId) as { synthesis_rationale: string | null } | undefined;
+            return srRow?.synthesis_rationale;
+          } catch { return undefined; }
+        })()
       }
     };
     onChunk(sseEvent(traceInfo));

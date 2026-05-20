@@ -132,7 +132,21 @@ export const PreflightGate = {
       };
     }
 
-    // 8. AGENT_CAP_VIOLATION check
+    // 8. STRUCTURED_OUTPUT_UNAVAILABLE check
+    if (context.structuredOutputRequested && !context.modelSupportsStructuredOutput) {
+      TelemetryEngine.record({
+        session_id: context.sessionId,
+        event_type: 'policy_violation',
+        ts: Date.now()
+      });
+      logException('STRUCTURED_OUTPUT_UNAVAILABLE', context.modelId, 'dismissed', context.sessionId, {
+        structuredOutputRequested: true,
+        modelSupportsStructuredOutput: false
+      });
+      return { allowed: false, violation: 'STRUCTURED_OUTPUT_UNAVAILABLE' };
+    }
+
+    // 9. AGENT_CAP_VIOLATION check
     if (context.activeAgentCount > 5) {
       logException('AGENT_CAP_VIOLATION', context.modelId, 'acknowledged', context.sessionId, {
         originalAgentCount: context.activeAgentCount,

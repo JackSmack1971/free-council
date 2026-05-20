@@ -9,6 +9,53 @@ import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 
+// Lightweight JSON schema validation (subset — validates type, required, properties)
+function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
+  const errors: Array<{ path: string; message: string }> = [];
+
+  function validate(value: any, schemaNode: any, path: string) {
+    if (!schemaNode || typeof schemaNode !== 'object') return;
+
+    if (schemaNode.type) {
+      const typeMap: Record<string, string> = {
+        string: 'string', number: 'number', integer: 'number',
+        boolean: 'boolean', array: 'object', object: 'object', null: 'object'
+      };
+      const expectedJs = typeMap[schemaNode.type] || schemaNode.type;
+      const actualType = Array.isArray(value) ? 'array' : typeof value;
+
+      if (schemaNode.type === 'array' && !Array.isArray(value)) {
+        errors.push({ path, message: `Expected array, got ${actualType}` });
+      } else if (schemaNode.type !== 'array' && schemaNode.type !== 'null' && typeof value !== expectedJs) {
+        errors.push({ path, message: `Expected ${schemaNode.type}, got ${typeof value}` });
+      }
+    }
+
+    if (schemaNode.required && Array.isArray(schemaNode.required) && typeof value === 'object' && value !== null) {
+      for (const key of schemaNode.required) {
+        if (!(key in value)) {
+          errors.push({ path: `${path}.${key}`, message: `Required property '${key}' is missing` });
+        }
+      }
+    }
+
+    if (schemaNode.properties && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      for (const [key, propSchema] of Object.entries(schemaNode.properties)) {
+        if (key in value) {
+          validate(value[key], propSchema, `${path}.${key}`);
+        }
+      }
+    }
+
+    if (schemaNode.items && Array.isArray(value)) {
+      value.forEach((item: any, i: number) => validate(item, schemaNode.items, `${path}[${i}]`));
+    }
+  }
+
+  validate(data, schema, '$');
+  return errors;
+}
+
 export const apiRouter = Router();
 
 const DEFAULT_MODELS = [
@@ -103,7 +150,8 @@ apiRouter.get('/models', requireApiKey, (req: Request, res: Response) => {
         ...(model.reasoning ? ['reasoning'] : []),
         ...(model.vision ? ['vision'] : []),
         ...(model.pdf_input ? ['pdf_input'] : []),
-        ...(model.image_input ? ['image_input'] : [])
+        ...(model.image_input ? ['image_input'] : []),
+        ...(model.structured_output ? ['structured_output'] : [])
       ],
       controls: SettingsDeriver.deriveControls(model)
     };
@@ -390,6 +438,44 @@ apiRouter.get('/config', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to retrieve configuration: ' + err.message });
   }
+});
+
+// POST /validate-schema — JSON schema validation service (#59)
+apiRouter.post('/validate-schema', (req: Request, res: Response) => {
+  const { responseText, schema } = req.body;
+
+  if (!responseText) {
+    return res.status(400).json({ errors: [{ path: '$', message: 'responseText is required' }] });
+  }
+
+  let parsedData: any;
+  try {
+    parsedData = JSON.parse(responseText);
+  } catch (parseErr) {
+    return res.json({ errors: [{ path: '$', message: 'Response is not valid JSON' }], valid: false });
+  }
+
+  if (!schema || typeof schema !== 'object') {
+    // No schema provided — just verify it's valid JSON
+    return res.json({ errors: [], valid: true, parsed: parsedData });
+  }
+
+  const errors = validateJsonSchema(parsedData, schema);
+  res.json({ errors, valid: errors.length === 0, parsed: errors.length === 0 ? parsedData : undefined });
+});
+
+// GET /model-performance — S score history for cross-session comparison (#85)
+apiRouter.get('/model-performance', (req: Request, res: Response) => {
+  const limit = parseInt(String(req.query.limit || '50'), 10);
+  const results = TelemetryEngine.queryModelPerformance(limit);
+  res.json(results);
+});
+
+// GET /retention-rate — council retention rate diagnostic
+apiRouter.get('/retention-rate', (req: Request, res: Response) => {
+  const windowSeconds = parseInt(String(req.query.window || '7200'), 10);
+  const rate = TelemetryEngine.queryCouncilRetentionRate(windowSeconds);
+  res.json({ councilRetentionRate: rate, windowSeconds });
 });
 
 // POST /config

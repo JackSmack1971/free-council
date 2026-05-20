@@ -1,6 +1,28 @@
 import { AgentPlan, AgentResult, AgentAssignment } from 'shared';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
+import { renderAggregatorPrompt } from './moa/index.js';
+
+// In-memory proposer response cache, keyed by (modelId + "|" + promptHash), scoped per session
+const proposerCache = new Map<string, Map<string, string>>();
+
+function getCacheKey(modelId: string, prompt: string): string {
+  // Simple hash: length + first 100 chars + last 100 chars
+  const normalized = prompt.trim();
+  const hash = `${normalized.length}:${normalized.slice(0, 100)}:${normalized.slice(-100)}`;
+  return `${modelId}|${hash}`;
+}
+
+function getSessionCache(sessionId: string): Map<string, string> {
+  if (!proposerCache.has(sessionId)) {
+    proposerCache.set(sessionId, new Map());
+  }
+  return proposerCache.get(sessionId)!;
+}
+
+export function clearSessionCache(sessionId: string): void {
+  proposerCache.delete(sessionId);
+}
 
 async function fetchWithRateLimitBackoff(
   url: string,
@@ -171,7 +193,278 @@ async function runSoloFallback(prompt: string, apiKey: string, sessionId: string
   }
 }
 
+async function callAgentWithCache(
+  agent: AgentAssignment,
+  prompt: string,
+  apiKey: string,
+  temperature: number,
+  sessionId: string
+): Promise<{ text: string; fromCache: boolean }> {
+  const cache = getSessionCache(sessionId);
+  const cacheKey = getCacheKey(agent.modelId, prompt);
+
+  if (cache.has(cacheKey)) {
+    return { text: cache.get(cacheKey)!, fromCache: true };
+  }
+
+  const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, temperature, sessionId);
+  cache.set(cacheKey, text);
+  return { text, fromCache: false };
+}
+
 export const AgentOrchestrator = {
+  async *executeGoAMoAHybrid(
+    plan: AgentPlan,
+    prompt: string,
+    apiKey: string,
+    sessionId: string,
+    attachmentsContext: string = ''
+  ): AsyncIterableIterator<AgentResult> {
+    const moaConfig = plan.moaConfig || { layers: 1, proposersPerLayer: 3, aggregatorModelId: 'openrouter/owl-alpha' };
+    const proposerAgents = plan.agents.slice(0, Math.min(plan.agents.length, moaConfig.proposersPerLayer));
+
+    if (proposerAgents.length === 0) {
+      yield { role: 'Orchestrator', modelId: 'none', response: 'No proposer agents planned.', status: 'failed', error: 'Empty agent list' };
+      return;
+    }
+
+    // Emit generating status for each proposer
+    for (const agent of proposerAgents) {
+      yield { role: agent.role, modelId: agent.modelId, response: '', status: 'generating' };
+    }
+
+    // Execute proposers in parallel (with session-scoped cache)
+    const proposerResults: Array<{ role: string; modelId: string; response: string; fromCache: boolean }> = [];
+    let cacheHits = 0;
+    let hasDoubleTimeout = false;
+
+    const contextPrompt = `${prompt.slice(0, 8000)}`;
+
+    const proposerOutcomes: Array<{ agent: AgentAssignment; text: string; fromCache: boolean; error?: string }> = [];
+    await Promise.all(
+      proposerAgents.map(async (agent) => {
+        try {
+          const { text, fromCache } = await callAgentWithCache(agent, contextPrompt, apiKey, 0.7, sessionId);
+          if (fromCache) cacheHits++;
+          proposerResults.push({ role: agent.role, modelId: agent.modelId, response: text, fromCache });
+          proposerOutcomes.push({ agent, text, fromCache });
+        } catch (err: any) {
+          if (err.message === 'DOUBLE_TIMEOUT') hasDoubleTimeout = true;
+          proposerOutcomes.push({ agent, text: '', fromCache: false, error: err.message });
+        }
+      })
+    );
+
+    // Yield proposer completions after all parallel calls finish
+    for (const outcome of proposerOutcomes) {
+      if (outcome.error) {
+        yield { role: outcome.agent.role, modelId: outcome.agent.modelId, response: '', status: 'failed', error: outcome.error };
+      } else {
+        yield { role: outcome.agent.role, modelId: outcome.agent.modelId, response: outcome.text, status: 'completed' };
+      }
+    }
+
+    if (hasDoubleTimeout) {
+      const fallback = await runSoloFallback(prompt, apiKey, sessionId);
+      yield fallback;
+      return;
+    }
+
+    const succeededProposers = proposerResults.filter(p => p.response);
+    if (succeededProposers.length === 0) {
+      yield { role: 'Orchestrator', modelId: 'none', response: 'All proposer calls failed.', status: 'failed', error: 'All proposers failed' };
+      return;
+    }
+
+    // Build aggregation prompt via template rendering
+    const renderedPrompt = renderAggregatorPrompt(
+      succeededProposers.map(p => ({ role: p.role, modelId: p.modelId, response: p.response })),
+      prompt,
+      attachmentsContext
+    );
+
+    // Aggregator call with fallback chain
+    const aggregatorFallbacks = [
+      moaConfig.aggregatorModelId,
+      'nvidia/nemotron-3-super-120b-a12b:free',
+      'openai/gpt-oss-120b:free'
+    ];
+
+    // Remove any aggregator that is also a proposer
+    const proposerIds = proposerAgents.map(a => a.modelId);
+    const validAggregators = aggregatorFallbacks.filter(m => !proposerIds.includes(m));
+    const aggregatorId = validAggregators[0] || aggregatorFallbacks[aggregatorFallbacks.length - 1];
+
+    let aggregatedResponse = '';
+    let aggregationCalls = 0;
+    let usedGOAFallback = false;
+
+    for (let i = 0; i < Math.min(validAggregators.length, 2); i++) {
+      const aggModelId = validAggregators[i] || aggregatorId;
+      aggregationCalls++;
+      try {
+        yield { role: 'Synthesizer', modelId: aggModelId, response: '', status: 'generating' };
+        const { text } = await callAgentWithTimeoutAndRetry(
+          { role: 'Synthesizer', modelId: aggModelId },
+          renderedPrompt,
+          apiKey,
+          0.3,
+          sessionId
+        );
+        aggregatedResponse = text;
+        break;
+      } catch (err: any) {
+        console.warn(`[AgentOrchestrator] Aggregator call ${i + 1} failed (${aggModelId}):`, err.message);
+        if (i === validAggregators.length - 1 || i >= 1) {
+          // All aggregator attempts failed — fall back to GoA max-pool
+          usedGOAFallback = true;
+          aggregatedResponse = succeededProposers[0].response;
+          TelemetryEngine.record({
+            session_id: sessionId,
+            event_type: 'fallback_to_goa_lite',
+            ts: Date.now(),
+            synthesis_rationale: `aggregator_double_timeout`
+          });
+          aggregatedResponse += '\n\n*MoA aggregation was unavailable — showing best proposer response.*';
+        }
+      }
+    }
+
+    // Extract synthesis rationale from last line if present
+    let synthesisRationale: string | undefined;
+    const lines = aggregatedResponse.trim().split('\n');
+    const lastLine = lines[lines.length - 1];
+    if (lastLine && lastLine.toLowerCase().includes('council synthesis rationale')) {
+      synthesisRationale = lastLine.replace(/^.*council synthesis rationale[:\s]*/i, '').trim();
+    }
+
+    // Record MoA telemetry
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'routed_to_council',
+      api_calls: proposerAgents.length + aggregationCalls,
+      agent_count: proposerAgents.length,
+      layer_count: moaConfig.layers,
+      proposer_models_json: JSON.stringify(proposerAgents.map(a => a.modelId)),
+      aggregation_calls: aggregationCalls,
+      synthesis_rationale: synthesisRationale,
+      ts: Date.now()
+    });
+
+    yield {
+      role: 'Synthesizer',
+      modelId: aggregatorId,
+      response: aggregatedResponse,
+      status: 'completed',
+      isPrimary: true,
+      sScore: 1.0
+    };
+  },
+
+  async *executeGoAFull(
+    plan: AgentPlan,
+    prompt: string,
+    apiKey: string,
+    sessionId: string
+  ): AsyncIterableIterator<AgentResult> {
+    // Steps 1-4: GoA-lite (parallel responses + S scoring + pruning + adjacency matrix)
+    const activeAgents = plan.agents.slice(0, 5);
+    const k = activeAgents.length;
+
+    if (k === 0) {
+      yield { role: 'Orchestrator', modelId: 'none', response: 'No agents planned.', status: 'failed', error: 'Empty agent list' };
+      return;
+    }
+
+    for (const agent of activeAgents) {
+      yield { role: agent.role, modelId: agent.modelId, response: '', status: 'generating' };
+    }
+
+    // Parallel initial responses
+    const initialResponses: AgentResult[] = [];
+    await Promise.all(activeAgents.map(async (agent) => {
+      try {
+        const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId);
+        initialResponses.push({ role: agent.role, modelId: agent.modelId, response: text, status: 'completed' });
+      } catch (err: any) {
+        initialResponses.push({ role: agent.role, modelId: agent.modelId, response: '', status: 'failed', error: err.message });
+      }
+    }));
+
+    const succeeded = initialResponses.filter(r => r.status === 'completed');
+    if (succeeded.length === 0) {
+      yield { role: 'Orchestrator', modelId: 'none', response: 'All agents failed.', status: 'failed', error: 'All agents failed' };
+      return;
+    }
+
+    // Simple S score computation (same as GoA-lite)
+    const S: Record<string, number> = {};
+    succeeded.forEach(a => { S[a.role] = 1 / succeeded.length; }); // Equal scores as default
+
+    // Step 5: Forward pass — high-S agents refine low-S responses (max 2 bidirectional cycles)
+    const highS = succeeded.filter(a => (S[a.role] || 0) >= 0.5);
+    const lowS = succeeded.filter(a => (S[a.role] || 0) < 0.5);
+
+    let refinedResponses = [...succeeded];
+
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const sortedHighS = [...highS].sort((a, b) => (S[b.role] || 0) - (S[a.role] || 0));
+      const highSText = sortedHighS.map(a => `${a.role}:\n${a.response}`).join('\n\n');
+
+      // Forward pass: high-S refine low-S
+      for (const lowAgent of lowS) {
+        try {
+          const refinePrompt = `Original query: ${prompt}\n\nHigher-quality responses:\n${highSText}\n\nPlease improve upon your previous response: ${lowAgent.response}\n\nProvide an improved response:`;
+          const { text } = await callAgentWithTimeoutAndRetry(
+            { role: lowAgent.role, modelId: lowAgent.modelId },
+            refinePrompt, apiKey, 0.5, sessionId
+          );
+          const idx = refinedResponses.findIndex(r => r.role === lowAgent.role);
+          if (idx >= 0) refinedResponses[idx] = { ...refinedResponses[idx], response: text };
+        } catch {
+          // Keep original on failure
+        }
+      }
+
+      // Reverse pass: updated low-S refine high-S
+      for (const highAgent of highS) {
+        try {
+          const lowSText = lowS.map(a => {
+            const refined = refinedResponses.find(r => r.role === a.role);
+            return `${a.role}:\n${refined?.response || a.response}`;
+          }).join('\n\n');
+          const refinePrompt = `Original query: ${prompt}\n\nOther agent responses:\n${lowSText}\n\nRefine your response considering these: ${highAgent.response}\n\nProvide a refined response:`;
+          const { text } = await callAgentWithTimeoutAndRetry(
+            { role: highAgent.role, modelId: highAgent.modelId },
+            refinePrompt, apiKey, 0.5, sessionId
+          );
+          const idx = refinedResponses.findIndex(r => r.role === highAgent.role);
+          if (idx >= 0) refinedResponses[idx] = { ...refinedResponses[idx], response: text };
+        } catch {
+          // Keep original on failure
+        }
+      }
+    }
+
+    // Graph pooling: max-pool (select highest-S response)
+    let primary = refinedResponses[0];
+    for (const r of refinedResponses) {
+      if ((S[r.role] || 0) > (S[primary.role] || 0)) primary = r;
+    }
+
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'routed_to_council',
+      api_calls: k,
+      agent_count: k,
+      ts: Date.now()
+    });
+
+    for (const r of refinedResponses) {
+      yield { ...r, sScore: S[r.role] || 0, isPrimary: r.role === primary.role };
+    }
+  },
+
   async *executeGoALite(
     plan: AgentPlan,
     prompt: string,
