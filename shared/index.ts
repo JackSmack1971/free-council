@@ -88,6 +88,9 @@ export interface PreflightContext {
   containsUpload:                boolean;
   uploadDisclosureAcknowledged:  boolean;
   sessionId:                     string;
+  budgetEscalated?:              boolean;
+  aggregatorModelId?:            string;
+  proposerModelIds?:             string[];
 }
 
 export type PolicyViolation =
