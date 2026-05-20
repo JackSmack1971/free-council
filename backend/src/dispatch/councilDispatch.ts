@@ -174,7 +174,9 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
           role: r.role,
           modelId: r.modelId,
           sScore: r.sScore,
-          isPrimary: r.role === primaryResult?.role
+          isPrimary: r.role === primaryResult?.role,
+          usedFallback: r.usedFallback,
+          fallbackReason: r.fallbackReason
         })),
         samplingRationale: plan.samplingRationale,
         totalApiCalls: plan.totalApiCalls,

@@ -6,10 +6,12 @@ async function callAgentWithTimeoutAndRetry(
   agent: AgentAssignment,
   prompt: string,
   apiKey: string,
-  temperature: number = 0.7
-): Promise<string> {
+  temperature: number = 0.7,
+  sessionId?: string
+): Promise<{ text: string; usedFallback: boolean; failureReason?: string }> {
   let attempts = 0;
   const maxAttempts = 2; // 1 initial + 1 fallback retry
+  let firstFailureReason: string | undefined;
 
   while (attempts < maxAttempts) {
     attempts++;
@@ -44,12 +46,24 @@ async function callAgentWithTimeoutAndRetry(
       }
 
       clearTimeout(timeoutId);
-      return text;
+      const usedFallback = attempts > 1;
+      if (usedFallback && sessionId) {
+        TelemetryEngine.record({
+          session_id: sessionId,
+          event_type: 'retry',
+          api_calls: 1,
+          ts: Date.now()
+        });
+      }
+      return { text, usedFallback, failureReason: usedFallback ? firstFailureReason : undefined };
     } catch (err: any) {
       clearTimeout(timeoutId);
       const isTimeout = err.name === 'AbortError';
+      if (attempts === 1) {
+        firstFailureReason = isTimeout ? 'timeout' : `HTTP error: ${err.message}`;
+      }
       console.warn(`[AgentOrchestrator] Call to ${agent.role} (${agent.modelId}) failed (attempt ${attempts}): ${isTimeout ? 'timeout' : err.message}`);
-      
+
       if (attempts >= maxAttempts) {
         if (isTimeout) {
           throw new Error('DOUBLE_TIMEOUT');
@@ -101,7 +115,9 @@ async function runSoloFallback(prompt: string, apiKey: string, sessionId: string
       modelId: defaultModel,
       response: text,
       isPrimary: true,
-      status: 'completed'
+      status: 'completed',
+      usedFallback: true,
+      fallbackReason: 'Double timeout on all council agents'
     };
   } catch (err: any) {
     return {
@@ -110,7 +126,9 @@ async function runSoloFallback(prompt: string, apiKey: string, sessionId: string
       response: 'Error during Solo fallback: ' + err.message,
       isPrimary: true,
       status: 'failed',
-      error: err.message
+      error: err.message,
+      usedFallback: true,
+      fallbackReason: 'Double timeout on all council agents'
     };
   } finally {
     clearTimeout(timeoutId);
@@ -159,13 +177,15 @@ export const AgentOrchestrator = {
     activeAgents.forEach(async (agent) => {
       const startTime = Date.now();
       try {
-        const text = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7);
+        const { text, usedFallback, failureReason } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId);
         const result: AgentResult = {
           role: agent.role,
           modelId: agent.modelId,
           response: text,
           latency: Date.now() - startTime,
-          status: 'completed'
+          status: 'completed',
+          usedFallback,
+          fallbackReason: failureReason
         };
         queue.push(result);
       } catch (err: any) {
@@ -285,7 +305,7 @@ You MUST output your evaluation in the following JSON format:
 Do not include any thinking, explanation, markdown formatting, or other text. Return ONLY the JSON object.`;
 
       try {
-        const rawResponse = await callAgentWithTimeoutAndRetry(scorerAgent, scoringPrompt, apiKey, 0.1);
+        const { text: rawResponse } = await callAgentWithTimeoutAndRetry(scorerAgent, scoringPrompt, apiKey, 0.1, sessionId);
         let content = rawResponse.trim();
         if (content.includes('```')) {
           const match = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);

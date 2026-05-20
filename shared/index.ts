@@ -75,6 +75,8 @@ export interface AgentResult {
   isPrimary?: boolean;
   sScore?: number;
   status?: 'generating' | 'evaluating' | 'completed' | 'failed';
+  usedFallback?: boolean;
+  fallbackReason?: string;
 }
 
 export interface PreflightContext {

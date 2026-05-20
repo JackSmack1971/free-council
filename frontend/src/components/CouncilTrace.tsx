@@ -5,6 +5,8 @@ interface TraceAgent {
   modelId: string;
   sScore: number;
   isPrimary: boolean;
+  usedFallback?: boolean;
+  fallbackReason?: string;
 }
 
 interface TraceInfo {
@@ -111,7 +113,7 @@ export default function CouncilTrace({ trace }: CouncilTraceProps) {
                     </div>
                   </div>
 
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     {getCapabilities(agent.modelId).map(cap => (
                       <span
                         key={cap}
@@ -126,6 +128,14 @@ export default function CouncilTrace({ trace }: CouncilTraceProps) {
                         {cap}
                       </span>
                     ))}
+                    {agent.usedFallback && (
+                      <span
+                        title={agent.fallbackReason || 'Primary call failed; retried successfully'}
+                        className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-amber-950/20 text-amber-400 border border-amber-900/30"
+                      >
+                        ⚠ Retried
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
