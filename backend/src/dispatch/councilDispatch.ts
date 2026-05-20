@@ -5,6 +5,7 @@ import { PreflightGate } from '../modules/preflightGate.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { dispatchSoloChat } from './soloDispatch.js';
 import { db } from '../db/connection.js';
+import { TelemetryEngine } from '../modules/telemetryEngine.js';
 
 interface CouncilDispatchOptions {
   sessionId: string;
@@ -157,6 +158,14 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       }
     };
     onChunk(`data: ${JSON.stringify(traceInfo)}\n\n`);
+
+    // Record telemetry event: completed_in_council
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'completed_in_council',
+      api_calls: 0,
+      ts: Date.now()
+    });
 
     onComplete();
   } catch (err: any) {

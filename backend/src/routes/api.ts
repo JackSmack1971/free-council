@@ -335,4 +335,37 @@ apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
   }
 });
 
+// GET /config
+apiRouter.get('/config', (req: Request, res: Response) => {
+  try {
+    const rows = db.prepare('SELECT key, value FROM app_config').all() as { key: string; value: string }[];
+    const configObj: Record<string, string> = {};
+    for (const row of rows) {
+      configObj[row.key] = row.value;
+    }
+    res.json(configObj);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to retrieve configuration: ' + err.message });
+  }
+});
+
+// POST /config
+apiRouter.post('/config', (req: Request, res: Response) => {
+  const { default_mode, council_reevaluated_after_ts, demoted_by_retention } = req.body;
+  try {
+    if (default_mode !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('default_mode', ?)").run(default_mode);
+    }
+    if (council_reevaluated_after_ts !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('council_reevaluated_after_ts', ?)").run(String(council_reevaluated_after_ts));
+    }
+    if (demoted_by_retention !== undefined) {
+      db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('demoted_by_retention', ?)").run(String(demoted_by_retention));
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update configuration: ' + err.message });
+  }
+});
+
 

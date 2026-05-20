@@ -3,6 +3,7 @@ import cors from 'cors';
 import { runMigrations } from './db/migrationRunner.js';
 import { ModelPoolManager } from './modules/modelPoolManager.js';
 import { apiRouter } from './routes/api.js';
+import { RetentionMonitor } from './modules/retentionMonitor.js';
 
 const app = express();
 app.use(cors());
@@ -28,6 +29,8 @@ async function startServer() {
 
   app.listen(PORT, () => {
     console.log(`[Startup] Server successfully started on port ${PORT}`);
+    // Start retention monitoring (every 60 seconds)
+    RetentionMonitor.start();
   });
 }
 
