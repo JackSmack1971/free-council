@@ -6,6 +6,7 @@ import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { dispatchSoloChat } from './soloDispatch.js';
 import { db } from '../db/connection.js';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
+import { FtsSearchService } from '../db/ftsSearchService.js';
 
 interface CouncilDispatchOptions {
   sessionId: string;
@@ -75,7 +76,8 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     // 5. Run RouterAgent GoA node sampling to get the plan
     const freeModels = ModelPoolManager.getFreeModels();
     const k = runSettings.proposerCount || 3;
-    const plan = await RouterAgent.sampleAgents(query, freeModels, k, apiKey);
+    const containsUpload = !!runSettings.containsUpload;
+    const plan = await RouterAgent.sampleAgents(query, freeModels, k, apiKey, containsUpload);
     plan.reasoningEffort = effort as 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 
     // 6. PreflightGate Check
@@ -114,8 +116,21 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       return;
     }
 
-    // 7. Execute GoA-lite via AgentOrchestrator
-    const generator = AgentOrchestrator.executeGoALite(plan, query, apiKey, sessionId);
+    // 7. Build enriched query with FTS5 context if uploads are present
+    let enrichedQuery = query;
+    if (containsUpload && runSettings.uploadDisclosureAcknowledged) {
+      const chunks = FtsSearchService.searchFileContent(sessionId, query, 5);
+      if (chunks.length > 0) {
+        const contextBlock = chunks
+          .map((c, i) => `[Document ${i + 1}] (file: ${c.filename}):\n${c.content}`)
+          .join('\n\n---\n\n');
+        enrichedQuery = `You have access to the following uploaded document excerpts. When answering, you MUST cite specific quotes or section references from these documents. Do not fabricate information not present in the documents.\n\n=== UPLOADED DOCUMENT CONTEXT ===\n${contextBlock}\n=== END OF CONTEXT ===\n\nUser Query: ${query}`;
+        console.log(`[councilDispatch] Injected ${chunks.length} FTS5 document chunks into prompt for session ${sessionId}.`);
+      }
+    }
+
+    // 8. Execute GoA-lite via AgentOrchestrator
+    const generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId);
 
     let primaryResult: AgentResult | null = null;
     const completedResults: AgentResult[] = [];

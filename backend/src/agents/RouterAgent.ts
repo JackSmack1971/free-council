@@ -11,7 +11,8 @@ export class RouterAgent {
     query: string,
     models: NormalizedModelCapabilities[],
     k: number,
-    apiKey: string
+    apiKey: string,
+    containsUpload: boolean = false
   ): Promise<AgentPlan> {
     // 1. Filter models to ensure we only present free models
     const freeModels = models.filter(m => m.is_free);
@@ -130,8 +131,8 @@ export class RouterAgent {
       }
     }
 
-    // Fallback if no valid agents resolved
-    if (agents.length === 0) {
+    // Fallback if no valid agents resolved from router LLM
+    if (agents.length === 0 && !containsUpload) {
       console.warn('[RouterAgent] No valid agents could be resolved. Using default coding and reasoning agent fallback.');
       const codingModel = freeModels.find(m => m.coding)?.modelId || defaultAgent;
       const reasoningModel = freeModels.find(m => m.reasoning)?.modelId || defaultAgent;
@@ -141,6 +142,27 @@ export class RouterAgent {
       ];
       totalApiCalls = 3;
       samplingRationale = 'Fallback defaults due to empty or invalid router response.';
+    }
+
+    // If the prompt contains uploads, force-inject a File Analyst agent
+    if (containsUpload) {
+      // Prefer owl-alpha (long-context). Fallback to any long-context free model.
+      const analystModelId =
+        freeModels.find(m => m.modelId === 'openrouter/owl-alpha')?.modelId ||
+        freeModels.find(m => m.long_context)?.modelId ||
+        (freeModels[0]?.modelId ?? 'openrouter/free');
+
+      // Remove any existing Analyst role to avoid conflicts
+      agents = agents.filter(a => a.role !== 'Analyst');
+
+      // Prepend the File Analyst agent so it is the primary proposer
+      agents.unshift({
+        role: 'File Analyst',
+        modelId: analystModelId
+      });
+
+      totalApiCalls = Math.max(totalApiCalls, agents.length + 1);
+      samplingRationale = `File Analyst activated for upload-containing prompt. Model: ${analystModelId}. ${samplingRationale}`;
     }
 
     return {

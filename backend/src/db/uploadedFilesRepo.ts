@@ -36,7 +36,7 @@ export class UploadedFilesRepo {
 
   static get(id: string): UploadedFileRecord | null {
     const stmt = db.prepare('SELECT * FROM uploaded_files WHERE id = ?');
-    return (stmt.get(id) as UploadedFileRecord) || null;
+    return (stmt.get(id) as unknown as UploadedFileRecord) || null;
   }
 
   static getBySession(sessionId: string): UploadedFileRecord[] {
