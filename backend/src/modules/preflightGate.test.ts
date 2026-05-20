@@ -138,6 +138,34 @@ describe('PreflightGate Tests', () => {
     assert.ok(excRow);
   });
 
+  test('should return UPLOAD_DISCLOSURE_PENDING if contains upload and not acknowledged', () => {
+    const sessionId = 'test-session-' + Date.now();
+    const context = {
+      modelId: 'google/gemini-2.5-flash',
+      isProviderLogged: false,
+      isFreeModel: true,
+      apiKeyPresent: true,
+      freeLockEnabled: false,
+      activeAgentCount: 1,
+      requestedApiCalls: 1,
+      promptClass: 'simple' as const,
+      privacyDisclosureAcknowledged: true,
+      zdrRequired: false,
+      modelSupportsZdr: true,
+      containsUpload: true,
+      uploadDisclosureAcknowledged: false,
+      sessionId
+    };
+
+    const res = PreflightGate.check(context);
+    assert.strictEqual(res.allowed, false);
+    assert.strictEqual(res.violation, 'UPLOAD_DISCLOSURE_PENDING');
+
+    const excStmt = db.prepare('SELECT * FROM policy_exceptions WHERE session_id = ? AND violation_type = ?');
+    const excRow = excStmt.get(sessionId, 'UPLOAD_DISCLOSURE_PENDING');
+    assert.ok(excRow);
+  });
+
   test('should return BUDGET_VIOLATION if simple prompt tries to make multi-agent calls and not escalated', () => {
     const sessionId = 'test-session-' + Date.now();
     const context = {

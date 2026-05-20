@@ -38,6 +38,8 @@ export default function Home() {
   const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [pendingPrivacyModel, setPendingPrivacyModel] = useState<string>('');
   const [chatError, setChatError] = useState<string | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadDisclosureAcknowledged, setUploadDisclosureAcknowledged] = useState(false);
 
   // Routing Mode & Rollback States
   const [routingMode, setRoutingMode] = useState<'solo' | 'council'>('council');
@@ -323,7 +325,9 @@ export default function Home() {
       const settingsPayload = {
         ...modelSettings,
         freeLockEnabled,
-        privacyDisclosureAcknowledged: acknowledgedModels.includes(selectedModelId) || acknowledgedModels.includes('council_acknowledged')
+        privacyDisclosureAcknowledged: acknowledgedModels.includes(selectedModelId) || acknowledgedModels.includes('council_acknowledged'),
+        containsUpload: attachedFiles.length > 0,
+        uploadDisclosureAcknowledged
       };
 
       await apiClient.dispatchStream(
@@ -369,6 +373,12 @@ export default function Home() {
       if (err.message && err.message.includes('PRIVACY_DISCLOSURE_PENDING')) {
         setPendingPrivacyModel(selectedModelId || 'council_acknowledged');
         setShowPrivacyModal(true);
+        setIsStreaming(false);
+        setIsWaitingFirstToken(false);
+        return;
+      }
+      if (err.message && err.message.includes('UPLOAD_DISCLOSURE_PENDING')) {
+        setShowUploadModal(true);
         setIsStreaming(false);
         setIsWaitingFirstToken(false);
         return;
@@ -443,6 +453,77 @@ export default function Home() {
       setActiveTrace(null);
       setIsStreaming(false);
 
+      fetchSessions();
+      fetchQuota();
+    } catch (err: any) {
+      console.error(err);
+      setChatError(err.message || 'An error occurred during completion dispatch.');
+      setIsStreaming(false);
+      setIsWaitingFirstToken(false);
+      setActiveProgress([]);
+      setActiveTrace(null);
+      fetchQuota();
+    }
+  };
+
+  const dismissUploadModal = async () => {
+    setUploadDisclosureAcknowledged(true);
+    setShowUploadModal(false);
+
+    // Auto-retry the dispatch with upload disclosure acknowledged
+    const currentSessionId = activeSessionId;
+    if (!currentSessionId) return;
+
+    try {
+      await apiClient.recordEvent(currentSessionId, 'upload_disclosure_acknowledged', 0, 'acknowledged');
+
+      setIsStreaming(true);
+      setIsWaitingFirstToken(true);
+      setStreamingText('');
+
+      const settingsPayload = {
+        ...modelSettings,
+        freeLockEnabled,
+        privacyDisclosureAcknowledged: acknowledgedModels.includes(selectedModelId) || acknowledgedModels.includes('council_acknowledged'),
+        containsUpload: attachedFiles.length > 0,
+        uploadDisclosureAcknowledged: true
+      };
+
+      let localTrace: any = null;
+
+      await apiClient.dispatchStream(
+        currentSessionId,
+        lastUnsentMessagesRef.current,
+        settingsPayload,
+        apiKey,
+        (token) => {
+          setIsWaitingFirstToken(false);
+          setStreamingText(prev => prev + token);
+        },
+        (event) => {
+          if (event.type === 'agent_progress') {
+            setActiveProgress(prev => {
+              const existing = prev.findIndex(p => p.role === event.role);
+              if (existing >= 0) {
+                const updated = [...prev];
+                updated[existing] = { role: event.role, status: event.status };
+                return updated;
+              } else {
+                return [...prev, { role: event.role, status: event.status }];
+              }
+            });
+          } else if (event.type === 'trace') {
+            localTrace = event.trace;
+            setActiveTrace(event.trace);
+          }
+        }
+      );
+
+      setMessages(prev => [...prev, { role: 'assistant', content: streamingText, trace: localTrace }]);
+      setStreamingText('');
+      setActiveProgress([]);
+      setActiveTrace(null);
+      setIsStreaming(false);
       fetchSessions();
       fetchQuota();
     } catch (err: any) {
@@ -1237,6 +1318,53 @@ export default function Home() {
                 className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold transition-all shadow-[0_2px_10px_rgba(245,158,11,0.2)] hover:shadow-[0_4px_15px_rgba(245,158,11,0.3)] active:scale-95"
               >
                 Acknowledge & Proceed
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* 6. Upload Privacy Disclosure Modal */}
+      {showUploadModal && (
+        <div id="upload-disclosure-modal" className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-neutral-900 border border-rose-500/20 rounded-2xl max-w-md w-full p-6 shadow-[0_0_50px_rgba(239,68,68,0.1)] space-y-5 transform scale-100 transition-transform">
+
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-rose-500/10 rounded-xl text-rose-500 shrink-0">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-md font-bold text-neutral-100 uppercase tracking-wide">
+                  Upload Privacy Notice
+                </h2>
+                <p className="text-sm text-neutral-300 leading-relaxed font-medium">
+                  Files you attach will be transmitted to OpenRouter and third-party model providers.
+                </p>
+              </div>
+            </div>
+
+            <div className="text-xs text-neutral-500 leading-relaxed bg-neutral-950/50 p-3 rounded-lg border border-neutral-800/50">
+              <strong className="text-rose-400">Do not upload</strong> sensitive credentials, API keys, passwords, private keys, or personal data. Uploaded content is processed subject to the model provider's standard terms. This warning is displayed once per session.
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowUploadModal(false)}
+                className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-750 text-xs font-bold text-neutral-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                id="upload-disclosure-dismiss-btn"
+                type="button"
+                onClick={dismissUploadModal}
+                className="px-5 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold transition-all shadow-[0_2px_10px_rgba(239,68,68,0.2)] hover:shadow-[0_4px_15px_rgba(239,68,68,0.3)] active:scale-95"
+              >
+                Acknowledge &amp; Proceed
               </button>
             </div>
 
