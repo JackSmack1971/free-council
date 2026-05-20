@@ -97,6 +97,8 @@ export interface PreflightContext {
   budgetEscalated?:              boolean;
   aggregatorModelId?:            string;
   proposerModelIds?:             string[];
+  structuredOutputRequested?:    boolean;
+  modelSupportsStructuredOutput?: boolean;
 }
 
 export type PolicyViolation =
@@ -107,7 +109,8 @@ export type PolicyViolation =
   | 'PRIVACY_DISCLOSURE_PENDING'
   | 'ZDR_REQUIRED_UNAVAILABLE'
   | 'UPLOAD_DISCLOSURE_PENDING'
-  | 'AGGREGATOR_ROLE_CONFLICT';
+  | 'AGGREGATOR_ROLE_CONFLICT'
+  | 'STRUCTURED_OUTPUT_UNAVAILABLE';
 
 export interface GateResult {
   allowed: boolean;

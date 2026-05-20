@@ -171,12 +171,159 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
     }
   };
 
+  const isFast = (runSettings.reasoningEffort || '').toLowerCase() === 'fast';
+  const structuredOutput = !!runSettings.structuredOutput;
+  const jsonSchema = runSettings.jsonSchema || null;
+
+  // Validate JSON response against optional schema (subset check)
+  function validateResponseJson(text: string): Array<{ path: string; message: string }> {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return [{ path: '$', message: 'Response is not valid JSON' }];
+    }
+    if (!jsonSchema || typeof jsonSchema !== 'object') return [];
+
+    const errors: Array<{ path: string; message: string }> = [];
+    function check(value: any, schema: any, path: string) {
+      if (!schema || typeof schema !== 'object') return;
+      if (schema.type) {
+        const actual = Array.isArray(value) ? 'array' : typeof value;
+        if (schema.type === 'array' && !Array.isArray(value)) {
+          errors.push({ path, message: `Expected array, got ${actual}` });
+        } else if (schema.type !== 'array' && schema.type !== 'null' && actual !== schema.type && !(schema.type === 'integer' && actual === 'number')) {
+          errors.push({ path, message: `Expected ${schema.type}, got ${actual}` });
+        }
+      }
+      if (schema.required && Array.isArray(schema.required) && typeof value === 'object' && value !== null) {
+        for (const key of schema.required) {
+          if (!(key in value)) errors.push({ path: `${path}.${key}`, message: `Required property '${key}' missing` });
+        }
+      }
+      if (schema.properties && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        for (const [k, ps] of Object.entries(schema.properties)) {
+          if (k in value) check(value[k], ps, `${path}.${k}`);
+        }
+      }
+      if (schema.items && Array.isArray(value)) {
+        value.forEach((item: any, i: number) => check(item, schema.items, `${path}[${i}]`));
+      }
+    }
+    check(parsed, jsonSchema, '$');
+    return errors;
+  }
+
+  // Non-streaming call for structured output mode
+  const callNonStream = async (msgList: any[], currentModelId: string): Promise<string> => {
+    const { stream: _s, structuredOutput: _so, jsonSchema: _js, ...baseSettings } = runSettings;
+    const responseFormat = jsonSchema
+      ? { type: 'json_schema', json_schema: { name: 'response', schema: jsonSchema } }
+      : { type: 'json_object' };
+    const body = {
+      model: currentModelId,
+      messages: msgList,
+      stream: false,
+      response_format: responseFormat,
+      ...baseSettings
+    };
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let resp: Response;
+    try {
+      resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'http://localhost:3000',
+          'X-Title': 'FreeCouncil'
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(`OpenRouter HTTP ${resp.status}: ${txt}`);
+    }
+    const data = await resp.json() as any;
+    return data.choices?.[0]?.message?.content || '';
+  };
+
+  // Emit a complete response as SSE chunks
+  const emitAsSSE = (content: string, validationErrors?: Array<{ path: string; message: string }>) => {
+    const chunk = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+    onChunk(chunk);
+    if (validationErrors && validationErrors.length > 0) {
+      const errChunk = `data: ${JSON.stringify({ type: 'validation_errors', errors: validationErrors })}\n\n`;
+      onChunk(errChunk);
+    }
+    onChunk('data: [DONE]\n\n');
+  };
+
   const executeCall = async (currentModelId: string): Promise<boolean> => {
     attempts++;
-    const isFast = (runSettings.reasoningEffort || '').toLowerCase() === 'fast';
 
     try {
       console.log(`[soloDispatch] POST to OpenRouter using model: ${currentModelId} (Attempt ${attempts})`);
+
+      // Structured output path: non-streaming with retry-on-invalid-JSON
+      if (structuredOutput) {
+        let msgList = [...trimmedMessages];
+        let lastContent = '';
+        let lastErrors: Array<{ path: string; message: string }> = [];
+        const maxJsonRetries = isFast ? 0 : 2;
+
+        for (let attempt = 0; attempt <= maxJsonRetries; attempt++) {
+          if (attempt > 0) {
+            // Build correction prompt
+            const errorList = lastErrors.map(e => `- ${e.path}: ${e.message}`).join('\n');
+            msgList = [
+              ...trimmedMessages,
+              { role: 'assistant', content: lastContent },
+              {
+                role: 'user',
+                content: `Your previous response had JSON validation errors. Please fix them and respond with valid JSON only.\n\nErrors:\n${errorList}\n\nRequired schema:\n${JSON.stringify(jsonSchema || {}, null, 2)}`
+              }
+            ];
+            TelemetryEngine.record({
+              session_id: sessionId,
+              event_type: 'structured_output_retry',
+              api_calls: attempt,
+              ts: Date.now()
+            });
+          }
+
+          lastContent = await callNonStream(msgList, currentModelId);
+          lastErrors = validateResponseJson(lastContent);
+
+          if (lastErrors.length === 0) break;
+        }
+
+        TelemetryEngine.record({
+          session_id: sessionId,
+          event_type: 'routed_to_solo',
+          api_calls: 1,
+          ts: Date.now()
+        });
+
+        if (lastErrors.length > 0) {
+          TelemetryEngine.record({
+            session_id: sessionId,
+            event_type: 'validation_failure',
+            ts: Date.now()
+          });
+        }
+
+        emitAsSSE(lastContent, lastErrors.length > 0 ? lastErrors : undefined);
+        onComplete();
+        return true;
+      }
+
+      // Standard streaming path
       const body = {
         model: currentModelId,
         messages: trimmedMessages,
@@ -195,7 +342,6 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
         throw new Error('Response body is empty');
       }
 
-      // Stream data
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
@@ -218,7 +364,6 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
     } catch (err: any) {
       console.error(`[soloDispatch] Attempt ${attempts} failed:`, err.message || err);
       if (attempts < maxAttempts) {
-        // Try fallback
         const fallback = FALLBACK_MODELS[currentModelId] || 'meta-llama/llama-3.3-70b-instruct:free';
         console.log(`[soloDispatch] Retrying fallback: ${fallback}`);
         return await executeCall(fallback);

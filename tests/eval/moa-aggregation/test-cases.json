@@ -1,0 +1,402 @@
+[
+  {
+    "id": "n3-001",
+    "subset": "n3_proposers",
+    "description": "Summarize a technical concept with 3 diverse proposers",
+    "userQuery": "Explain how garbage collection works in modern programming languages.",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Garbage collection (GC) is an automatic memory management process that reclaims memory occupied by objects no longer referenced by any program. Modern GCs use techniques like mark-and-sweep, generational collection, and concurrent collection to minimize pause times."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "GC automatically frees memory that is no longer in use. Key algorithms: reference counting (Python, Swift), mark-and-sweep (JVM, .NET), tri-color marking. JVM uses generational GC with young/old generations and G1GC for low-latency applications."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Garbage collection removes unused objects from memory automatically. Different languages use different strategies: Java uses generational GC, Python uses reference counting with a cycle collector, Go uses concurrent mark-and-sweep, Rust avoids GC entirely through ownership and borrowing."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly describe at least two GC algorithms, (2) mention at least two programming languages with their GC approach, (3) not contradict any proposer's factual claims."
+  },
+  {
+    "id": "n3-002",
+    "subset": "n3_proposers",
+    "description": "Coding task with 3 proposers producing complementary code",
+    "userQuery": "Write a Python function to find all prime numbers up to n using the Sieve of Eratosthenes.",
+    "proposers": [
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "def sieve(n):\n    if n < 2: return []\n    is_prime = [True] * (n + 1)\n    is_prime[0] = is_prime[1] = False\n    for i in range(2, int(n**0.5) + 1):\n        if is_prime[i]:\n            for j in range(i*i, n+1, i):\n                is_prime[j] = False\n    return [i for i, p in enumerate(is_prime) if p]"
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "The Sieve of Eratosthenes works by iteratively marking composites. Time complexity: O(n log log n). Space: O(n). The key optimization is starting from i*i (not 2*i) since smaller multiples are already marked. Handle edge cases: n < 2 returns empty list."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "The implementation should handle: n=0 (empty), n=1 (empty), n=2 ([2]). The sieve correctly starts inner loop at i*i for efficiency. The list comprehension cleanly extracts primes. Consider adding type hints: def sieve(n: int) -> list[int]."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) include a correct Python implementation, (2) mention time complexity O(n log log n), (3) handle edge cases n < 2, (4) include the i*i optimization."
+  },
+  {
+    "id": "n3-003",
+    "subset": "n3_proposers",
+    "description": "Research question with 3 proposers",
+    "userQuery": "What are the main differences between supervised and unsupervised learning?",
+    "proposers": [
+      {
+        "role": "Researcher",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Supervised learning uses labeled training data to learn a mapping from inputs to outputs. Unsupervised learning discovers patterns in unlabeled data. Key supervised algorithms: linear regression, SVM, neural networks. Key unsupervised: k-means, DBSCAN, autoencoders, PCA."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "The fundamental difference is labeled vs unlabeled data. Supervised: predicts a target variable (classification/regression). Unsupervised: finds structure (clustering, dimensionality reduction, generative modeling). Semi-supervised combines both. Self-supervised is a form of unsupervised that creates labels from data itself."
+      },
+      {
+        "role": "Skeptic",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "While the labeled/unlabeled distinction is accurate, the practical difference is the availability and cost of labels. Supervised learning requires expensive human annotation. Unsupervised can exploit vast unlabeled datasets. Reinforcement learning is often considered a third paradigm."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly define both paradigms, (2) mention labeled vs unlabeled distinction, (3) give at least 2 examples of each type, (4) not introduce factually incorrect claims."
+  },
+  {
+    "id": "n3-004",
+    "subset": "n3_proposers",
+    "description": "Mathematical problem with 3 proposers",
+    "userQuery": "Prove that the square root of 2 is irrational.",
+    "proposers": [
+      {
+        "role": "Mathematician",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Proof by contradiction: Assume sqrt(2) = p/q in lowest terms (gcd(p,q)=1). Then 2 = p²/q², so p² = 2q². p² is even, so p is even. Write p = 2k. Then 4k² = 2q², so q² = 2k², meaning q is also even. But then gcd(p,q) >= 2, contradicting our assumption. QED."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "The classic proof is correct. Key steps: (1) assume rational p/q in lowest terms, (2) show p must be even, (3) show q must also be even, (4) derive contradiction with gcd(p,q)=1. The step 'p² even implies p even' uses the fact that odd²=odd."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "This is the classic proof attributed to the ancient Greeks. Assume sqrt(2) is rational: sqrt(2) = a/b with gcd(a,b) = 1. Square both sides: 2b² = a². Therefore a² is even, making a even (since odd numbers have odd squares). Let a = 2c. Then 2b² = 4c², so b² = 2c². Thus b is also even. This contradicts gcd(a,b)=1."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) present a complete proof by contradiction, (2) correctly show both p and q must be even, (3) correctly state the contradiction with gcd assumption, (4) not omit key logical steps."
+  },
+  {
+    "id": "n3-005",
+    "subset": "n3_proposers",
+    "description": "General knowledge with 3 proposers",
+    "userQuery": "What is the CAP theorem in distributed systems?",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "CAP theorem states that a distributed system can guarantee at most 2 of 3 properties: Consistency (all nodes see the same data at the same time), Availability (every request receives a response), Partition tolerance (system continues despite network partitions). In practice, partition tolerance is necessary, so the real choice is between CP (consistent but may be unavailable) and AP (available but may be inconsistent)."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "CAP theorem (Brewer, 2000): Choose 2 of: C=Consistency, A=Availability, P=Partition tolerance. Examples: Zookeeper/etcd (CP), Cassandra/DynamoDB (AP), traditional RDBMS on single node (CA but not distributed). PACELC extends CAP with Latency-Consistency tradeoff even when no partition exists."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "The CAP theorem by Eric Brewer says distributed databases cannot simultaneously guarantee Consistency, Availability, and Partition tolerance. Network partitions always happen in real distributed systems, so engineers must choose between consistency and availability. MongoDB and Redis choose CP by default; DynamoDB and Cassandra choose AP."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly define all 3 CAP properties, (2) state that at most 2 can be guaranteed, (3) give at least 2 real-world database examples, (4) mention the practical CP vs AP tradeoff."
+  },
+  {
+    "id": "n4-001",
+    "subset": "n4_proposers",
+    "description": "Complex architecture question with 4 proposers",
+    "userQuery": "Design a scalable microservices architecture for an e-commerce platform.",
+    "proposers": [
+      {
+        "role": "Architect",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Use domain-driven design: User Service, Product Catalog Service, Order Service, Payment Service, Notification Service. Each service has its own database. API Gateway for routing. Event bus (Kafka) for async communication. Circuit breakers for resilience."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Key services: auth-service, catalog-service, cart-service, checkout-service, payment-service, fulfillment-service, notification-service. Use REST for sync calls, Kafka for events (order.created, payment.processed). Each service: its own PostgreSQL or MongoDB. Kubernetes for orchestration. Redis for caching."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "The architecture needs to handle peak loads (Black Friday). Key concerns: (1) Independent scalability per service, (2) Saga pattern for distributed transactions (order+payment), (3) CQRS for high-read catalog, (4) Idempotency for payment processing, (5) Outbox pattern for reliable event publishing."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "Important considerations often missed: (1) API versioning strategy, (2) Service mesh (Istio) for observability, (3) Distributed tracing (Jaeger/Zipkin), (4) Rate limiting and throttling, (5) Data consistency in the face of service failures, (6) Eventual consistency guarantees exposed to customers."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) name at least 5 distinct services, (2) mention async event communication, (3) address data consistency/transactions, (4) mention at least one reliability pattern (circuit breaker, saga, outbox)."
+  },
+  {
+    "id": "n4-002",
+    "subset": "n4_proposers",
+    "description": "Security analysis with 4 proposers",
+    "userQuery": "What are the most critical security vulnerabilities in web applications?",
+    "proposers": [
+      {
+        "role": "Security",
+        "modelId": "openrouter/owl-alpha",
+        "response": "OWASP Top 10: (1) Broken Access Control, (2) Cryptographic Failures, (3) Injection (SQL, NoSQL, LDAP), (4) Insecure Design, (5) Security Misconfiguration, (6) Vulnerable Components, (7) Identification/Authentication Failures, (8) Software Integrity Failures, (9) Logging Failures, (10) SSRF."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Most commonly exploited: SQL injection, XSS (stored/reflected/DOM), CSRF, Insecure Direct Object References (IDOR), Authentication bypass. Mitigation: parameterized queries, CSP headers, CSRF tokens, proper session management, input validation."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Critical in practice: (1) SQL injection can dump entire databases, (2) XSS can steal session tokens, (3) CSRF can trigger actions on behalf of users, (4) Broken authentication enables account takeover, (5) SSRF can access internal services. Defense: WAF, content security headers, MFA."
+      },
+      {
+        "role": "Researcher",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "Based on OWASP and recent CVEs, the highest-impact categories are: Broken Access Control (72% of apps tested by OWASP), Injection (SQLi and NoSQLi still prevalent), and Vulnerable Dependencies (Log4Shell affected millions of systems). Supply chain attacks are increasingly critical."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) mention at least 5 vulnerability types, (2) reference OWASP or industry standards, (3) include mitigations for at least 3 vulnerabilities, (4) not confuse or mislabel any vulnerability type."
+  },
+  {
+    "id": "n4-003",
+    "subset": "n4_proposers",
+    "description": "Performance optimization with 4 proposers",
+    "userQuery": "How do you optimize database query performance?",
+    "proposers": [
+      {
+        "role": "Database",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Index strategy: B-tree for range queries, hash for equality, partial indexes for filtered queries. Avoid N+1 with eager loading (JOIN or IN clause). Use EXPLAIN ANALYZE to identify seq scans. Normalize for write-heavy, denormalize for read-heavy. Partition large tables by date or hash."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Key techniques: (1) Add covering indexes for frequent query patterns, (2) Use query hints sparingly, (3) Avoid SELECT *, (4) Use connection pooling (PgBouncer), (5) Cache with Redis for repeated queries, (6) Batch inserts instead of row-by-row. Profile with EXPLAIN ANALYZE before and after."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Performance bottlenecks: (1) Missing indexes (seq scan vs index scan), (2) Cartesian joins from missing JOIN conditions, (3) Suboptimal query planner stats (run ANALYZE), (4) Lock contention on high-write tables, (5) Long-running transactions blocking others. Monitor with pg_stat_statements."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "Don't optimize prematurely. Profile first. Common mistakes: adding indexes on every column (degrades write performance), over-normalizing (too many JOINs), under-normalizing (data anomalies). For OLAP workloads, columnar storage (Parquet, Redshift) outperforms row-oriented OLTP databases."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) mention indexing as key optimization, (2) mention EXPLAIN ANALYZE or equivalent profiling, (3) address at least one write-performance consideration, (4) mention caching or connection pooling."
+  },
+  {
+    "id": "n4-004",
+    "subset": "n4_proposers",
+    "description": "Algorithm design with 4 proposers",
+    "userQuery": "Explain dynamic programming and give an example.",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Dynamic programming (DP) solves problems by breaking them into overlapping subproblems and storing results (memoization/tabulation) to avoid recomputation. Two approaches: top-down (recursive + memo) and bottom-up (iterative table). Optimal substructure + overlapping subproblems = DP is applicable."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Example: Fibonacci with DP.\nNaive O(2^n): def fib(n): return fib(n-1)+fib(n-2) if n>1 else n\nDP O(n): dp = [0,1]; [dp.append(dp[-1]+dp[-2]) for _ in range(n-1)]; return dp[n]\nClassic DP problems: longest common subsequence, 0/1 knapsack, shortest path (Bellman-Ford)."
+      },
+      {
+        "role": "Researcher",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "DP was formalized by Bellman in the 1950s. Key insight: the principle of optimality — an optimal solution contains optimal solutions to subproblems. Examples: shortest path (Dijkstra, Bellman-Ford), sequence alignment (bioinformatics), option pricing (Black-Scholes discretized)."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "Important to distinguish DP from greedy algorithms: greedy makes locally optimal choices without reconsidering; DP explores all subproblems. Greedy works for activity selection, Huffman coding; DP needed for 0/1 knapsack (fractional knapsack is greedy). Space optimization: often can reduce O(n²) space to O(n)."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly define DP with both required properties, (2) include at least one concrete code or pseudocode example, (3) mention memoization or tabulation, (4) give at least 2 classic DP problem examples."
+  },
+  {
+    "id": "n4-005",
+    "subset": "n4_proposers",
+    "description": "Cloud architecture with 4 proposers",
+    "userQuery": "What are the key differences between containers and virtual machines?",
+    "proposers": [
+      {
+        "role": "Architect",
+        "modelId": "openrouter/owl-alpha",
+        "response": "VMs: full OS virtualization via hypervisor (VMware, KVM), GBs in size, minutes to start, strong isolation. Containers: OS-level virtualization via namespaces/cgroups (Docker, containerd), MBs in size, seconds to start, shared kernel. VMs for strong isolation; containers for density and speed."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Docker containers share the host OS kernel via Linux namespaces and control groups. VMs run a full guest OS on a hypervisor. Containers are ~10x lighter: a Node.js container might be 200MB vs a VM at 2GB+. Kubernetes orchestrates containers at scale; VMware/vSphere orchestrates VMs."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Performance: containers have near-native performance (< 1% overhead vs bare metal). VMs have 5-30% overhead from hypervisor. Security: VMs provide stronger isolation (kernel separation); containers share kernel so a kernel exploit affects all containers. Use VMs for regulatory compliance, containers for microservices density."
+      },
+      {
+        "role": "Verifier",
+        "modelId": "nvidia/nemotron-3-super-120b-a12b:free",
+        "response": "The 'containers vs VMs' framing is often a false dichotomy — many production setups use both: VMs from cloud provider (EC2, GCE) running Kubernetes nodes that run containers. gVisor and Kata Containers provide VM-level isolation within container abstractions. Windows containers still require a VM on Linux hosts."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly state that containers share the host kernel, (2) mention size and startup time differences, (3) address the security/isolation tradeoff, (4) mention at least one use case for each."
+  },
+  {
+    "id": "conflict-001",
+    "subset": "conflicting_facts",
+    "description": "Proposers give conflicting facts about programming language creation dates",
+    "userQuery": "When was Python created and by whom?",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Python was created by Guido van Rossum and first released in 1991. Development began in December 1989."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Python was created by Guido van Rossum in 1989, with the first version (0.9.0) released in February 1991."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Python was invented by Linus Torvalds in 1995 as a scripting language for Linux systems."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly attribute Python to Guido van Rossum (NOT Linus Torvalds), (2) correctly state Python was created in 1989/released 1991 (NOT 1995), (3) identify and reject the third proposer's factually incorrect claims, (4) demonstrate critical evaluation of conflicting sources."
+  },
+  {
+    "id": "conflict-002",
+    "subset": "conflicting_facts",
+    "description": "Proposers give conflicting facts about a well-known algorithm complexity",
+    "userQuery": "What is the time complexity of quicksort?",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "Quicksort has average-case O(n log n) time complexity. Worst case is O(n²) when the pivot is always the minimum or maximum element (e.g., sorted array with naive pivot selection). In-place variant uses O(log n) auxiliary space."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "Quicksort: O(n log n) average, O(n²) worst case. Randomized quicksort achieves O(n log n) expected with high probability. Space complexity O(log n) for call stack."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Quicksort always runs in O(n) time regardless of input because it only does a single pass over the array. It is faster than merge sort in all cases."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) state O(n log n) average case, (2) state O(n²) worst case, (3) reject the third proposer's claim that quicksort is always O(n), (4) not propagate the incorrect O(n) claim to the user."
+  },
+  {
+    "id": "conflict-003",
+    "subset": "conflicting_facts",
+    "description": "Proposers give conflicting facts about a historical event",
+    "userQuery": "Who invented the World Wide Web?",
+    "proposers": [
+      {
+        "role": "Researcher",
+        "modelId": "openrouter/owl-alpha",
+        "response": "The World Wide Web was invented by Tim Berners-Lee in 1989 at CERN. He proposed the system in his paper 'Information Management: A Proposal' and implemented the first web server (CERN httpd) and browser (WorldWideWeb) by 1990."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "Tim Berners-Lee invented the World Wide Web in 1989 at CERN in Switzerland. He developed HTTP, HTML, and URLs as the foundational protocols. The first website went live on August 6, 1991."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "The internet was invented by Al Gore in 1969 as part of the ARPANET project, which later became the World Wide Web as we know it today."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly attribute WWW to Tim Berners-Lee at CERN in 1989, (2) distinguish WWW from the internet/ARPANET (different things), (3) reject the third proposer's incorrect claim about Al Gore inventing the internet, (4) mention key technologies (HTTP, HTML, URLs)."
+  },
+  {
+    "id": "conflict-004",
+    "subset": "conflicting_facts",
+    "description": "Proposers give conflicting medical facts",
+    "userQuery": "How many chambers does the human heart have?",
+    "proposers": [
+      {
+        "role": "Analyst",
+        "modelId": "openrouter/owl-alpha",
+        "response": "The human heart has 4 chambers: right atrium, right ventricle, left atrium, and left ventricle. The right side pumps deoxygenated blood to the lungs; the left side pumps oxygenated blood to the body."
+      },
+      {
+        "role": "General",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "The human heart has 4 chambers. The two atria receive blood and the two ventricles pump it out. The left ventricle is the most muscular as it pumps blood through the entire body."
+      },
+      {
+        "role": "Coder",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "The human heart has 3 chambers: the left ventricle, right ventricle, and the main atrium that splits into two. Fish hearts have only 2 chambers."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly state 4 chambers, (2) name all 4 chambers correctly, (3) reject the third proposer's incorrect claim of 3 chambers, (4) correctly describe the dual-pump function."
+  },
+  {
+    "id": "conflict-005",
+    "subset": "conflicting_facts",
+    "description": "Proposers give conflicting facts about database transactions",
+    "userQuery": "What does ACID stand for in database transactions?",
+    "proposers": [
+      {
+        "role": "Database",
+        "modelId": "openrouter/owl-alpha",
+        "response": "ACID stands for: Atomicity (transaction completes fully or not at all), Consistency (database remains in valid state), Isolation (concurrent transactions don't interfere), Durability (committed transactions persist). These properties ensure reliable database transactions."
+      },
+      {
+        "role": "Analyst",
+        "modelId": "openai/gpt-oss-120b:free",
+        "response": "ACID: Atomicity, Consistency, Isolation, Durability. Atomicity: all-or-nothing. Consistency: only valid data written. Isolation: concurrent txns are isolated from each other. Durability: committed data survives failures. PostgreSQL, MySQL InnoDB, Oracle all support ACID; NoSQL databases often sacrifice some properties for performance."
+      },
+      {
+        "role": "General",
+        "modelId": "qwen/qwen3-coder:free",
+        "response": "ACID stands for: Availability, Consistency, Integrity, and Distribution. These are the four guarantees that modern distributed databases must provide to be production-ready."
+      }
+    ],
+    "expectedSynthesisQuality": "pass",
+    "rubric": "Synthesis must: (1) correctly expand ACID as Atomicity, Consistency, Isolation, Durability, (2) reject the third proposer's incorrect expansion (Availability/Integrity/Distribution), (3) correctly define each property, (4) not conflate ACID with CAP theorem properties."
+  }
+]

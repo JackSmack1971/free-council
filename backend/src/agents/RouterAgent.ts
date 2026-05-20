@@ -7,12 +7,48 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export class RouterAgent {
+  static determineExecutionMode(
+    reasoningEffort: string,
+    promptClass: 'simple' | 'non_trivial',
+    freeLockEnabled: boolean,
+    budgetEscalated: boolean = false
+  ): { executionMode: 'goa_lite' | 'moa_lite' | 'goa_moa_hybrid' | 'solo'; moaConfig?: AgentPlan['moaConfig']; layers?: number } {
+    if (reasoningEffort === 'Fast') {
+      return { executionMode: 'goa_lite' };
+    }
+    if (promptClass === 'simple') {
+      return { executionMode: 'solo' };
+    }
+    // Non-trivial prompt with Balanced or Deep effort
+    if (reasoningEffort === 'Balanced' || reasoningEffort === 'Deep' || reasoningEffort === 'Adaptive') {
+      // layers > 1 is only allowed in Deep + explicit user escalation and free-only lock disabled
+      const layers = (reasoningEffort === 'Deep' && !freeLockEnabled && budgetEscalated) ? 2 : 1;
+      const effectiveLayers = freeLockEnabled ? 1 : layers;
+      const samplingRationaleNote = effectiveLayers < layers
+        ? 'Downgraded to 1-layer MoA: free-only ≤5 call cap enforced'
+        : undefined;
+      return {
+        executionMode: 'goa_moa_hybrid',
+        moaConfig: {
+          layers: effectiveLayers,
+          proposersPerLayer: 3,
+          aggregatorModelId: 'openrouter/owl-alpha'
+        }
+      };
+    }
+    return { executionMode: 'goa_lite' };
+  }
+
   static async sampleAgents(
     query: string,
     models: NormalizedModelCapabilities[],
     k: number,
     apiKey: string,
-    containsUpload: boolean = false
+    containsUpload: boolean = false,
+    reasoningEffort: string = 'Balanced',
+    promptClass: 'simple' | 'non_trivial' = 'non_trivial',
+    freeLockEnabled: boolean = true,
+    budgetEscalated: boolean = false
   ): Promise<AgentPlan> {
     // 1. Filter models to ensure we only present free models
     const freeModels = models.filter(m => m.is_free);
@@ -165,11 +201,43 @@ export class RouterAgent {
       samplingRationale = `File Analyst activated for upload-containing prompt. Model: ${analystModelId}. ${samplingRationale}`;
     }
 
+    // Determine execution mode based on reasoning effort + prompt class
+    const modeResult = RouterAgent.determineExecutionMode(
+      reasoningEffort,
+      promptClass,
+      freeLockEnabled,
+      budgetEscalated
+    );
+
+    // For goa_moa_hybrid: enforce aggregator ≠ proposer constraint
+    let resolvedMoaConfig = modeResult.moaConfig;
+    if (resolvedMoaConfig && agents.length > 0) {
+      const proposerIds = agents.map(a => a.modelId);
+      const fallbackAggregators = [
+        'openrouter/owl-alpha',
+        'nvidia/nemotron-3-super-120b-a12b:free',
+        'openai/gpt-oss-120b:free'
+      ];
+      let aggregatorModelId = resolvedMoaConfig.aggregatorModelId;
+      if (proposerIds.includes(aggregatorModelId)) {
+        const nextBest = fallbackAggregators.find(m => !proposerIds.includes(m));
+        aggregatorModelId = nextBest || aggregatorModelId;
+        samplingRationale = `Aggregator reassigned to ${aggregatorModelId} (role-conflict avoidance). ` + samplingRationale;
+      }
+      resolvedMoaConfig = { ...resolvedMoaConfig, aggregatorModelId };
+    }
+
+    // Update totalApiCalls for MoA hybrid mode
+    if (modeResult.executionMode === 'goa_moa_hybrid' && resolvedMoaConfig) {
+      totalApiCalls = 1 + Math.min(agents.length, resolvedMoaConfig.proposersPerLayer) + 1;
+    }
+
     return {
       agents,
       totalApiCalls,
       samplingRationale,
-      executionMode: 'goa_lite'
+      executionMode: modeResult.executionMode,
+      ...(resolvedMoaConfig ? { moaConfig: resolvedMoaConfig } : {})
     };
   }
 }

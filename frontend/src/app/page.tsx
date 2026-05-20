@@ -61,6 +61,27 @@ export default function Home() {
   const [zdrRequired, setZdrRequired] = useState<boolean>(false);
   const [showRollbackBanner, setShowRollbackBanner] = useState(false);
 
+  // Phase 4 Structured Output States (#56/#57/#58)
+  const [structuredOutputEnabled, setStructuredOutputEnabled] = useState<boolean>(false);
+  const [jsonSchemaText, setJsonSchemaText] = useState<string>('');
+  const [jsonSchemaError, setJsonSchemaError] = useState<string | null>(null);
+  const [jsonSchema, setJsonSchema] = useState<any>(null);
+
+  // Phase 4 Presets (#67)
+  interface Preset { name: string; mode: 'solo' | 'council'; effort: 'Fast' | 'Balanced' | 'Deep' | 'Adaptive'; isBuiltIn: boolean }
+  const BUILT_IN_PRESETS: Preset[] = [
+    { name: 'Coding', mode: 'council', effort: 'Balanced', isBuiltIn: true },
+    { name: 'Research', mode: 'council', effort: 'Deep', isBuiltIn: true },
+    { name: 'Extraction', mode: 'council', effort: 'Balanced', isBuiltIn: true },
+    { name: 'Critique', mode: 'council', effort: 'Balanced', isBuiltIn: true }
+  ];
+  const [customPresets, setCustomPresets] = useState<Preset[]>([]);
+  const [showPresetsPanel, setShowPresetsPanel] = useState(false);
+
+  // Phase 5 Model Performance (#85)
+  const [modelPerf, setModelPerf] = useState<Array<{ modelId: string; avgScore: number; sessionCount: number; lastSeen: number }>>([]);
+  const [showModelPerf, setShowModelPerf] = useState(false);
+
   // Council SSE Progress State
   const [agentCards, setAgentCards] = useState<AgentCard[]>([]);
   const activeStreamRef = useRef<(() => void) | null>(null); // abort handle
@@ -186,6 +207,19 @@ export default function Home() {
     const savedZdr = await localDB.get<boolean>('zdr_required');
     if (savedZdr !== null) setZdrRequired(!!savedZdr);
 
+    // Load structured output state
+    const savedSO = await localDB.get<boolean>('structured_output_enabled');
+    if (savedSO !== null) setStructuredOutputEnabled(!!savedSO);
+    const savedSchema = await localDB.get<string>('json_schema_text');
+    if (savedSchema) {
+      setJsonSchemaText(savedSchema);
+      try { setJsonSchema(JSON.parse(savedSchema)); } catch { /* ignore */ }
+    }
+
+    // Load custom presets
+    const savedPresets = await localDB.get<Preset[]>('custom_presets');
+    if (Array.isArray(savedPresets)) setCustomPresets(savedPresets);
+
     // Fetch Config
     await fetchConfig();
 
@@ -296,6 +330,122 @@ export default function Home() {
     if (selectedModelId) {
       await localDB.set(`settings_${selectedModelId}`, updated);
     }
+  };
+
+  const handleStructuredOutputToggle = async (val: boolean) => {
+    setStructuredOutputEnabled(val);
+    await localDB.set('structured_output_enabled', val);
+  };
+
+  const handleJsonSchemaChange = async (text: string) => {
+    setJsonSchemaText(text);
+    await localDB.set('json_schema_text', text);
+    if (!text.trim()) {
+      setJsonSchema(null);
+      setJsonSchemaError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      setJsonSchema(parsed);
+      setJsonSchemaError(null);
+    } catch (e: any) {
+      setJsonSchema(null);
+      setJsonSchemaError('Invalid JSON: ' + e.message);
+    }
+  };
+
+  const applyPreset = (preset: Preset) => {
+    setRoutingMode(preset.mode);
+    setReasoningEffort(preset.effort);
+    localDB.set('routing_mode', preset.mode);
+    localDB.set('reasoning_effort', preset.effort);
+    if (preset.name === 'Extraction') {
+      setStructuredOutputEnabled(true);
+      localDB.set('structured_output_enabled', true);
+    }
+  };
+
+  const saveAsPreset = async () => {
+    const name = prompt('Preset name:');
+    if (!name || !name.trim()) return;
+    const newPreset: Preset = { name: name.trim(), mode: routingMode, effort: reasoningEffort, isBuiltIn: false };
+    const updated = [...customPresets, newPreset];
+    setCustomPresets(updated);
+    await localDB.set('custom_presets', updated);
+  };
+
+  const deleteCustomPreset = async (name: string) => {
+    const updated = customPresets.filter(p => p.name !== name);
+    setCustomPresets(updated);
+    await localDB.set('custom_presets', updated);
+  };
+
+  const isValidJson = (text: string): boolean => {
+    try { JSON.parse(text); return true; } catch { return false; }
+  };
+
+  const isCsvEligible = (text: string): boolean => {
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object' && !Array.isArray(parsed[0]);
+    } catch { return false; }
+  };
+
+  const downloadFile = (content: string, filename: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadJson = (content: string, sid: string) => {
+    try {
+      const parsed = JSON.parse(content);
+      downloadFile(JSON.stringify(parsed, null, 2), `freecouncil-${sid}-response.json`, 'application/json');
+      if (sid) apiClient.recordEvent(sid, 'export_triggered', 0, 'json');
+    } catch { /* invalid JSON, skip */ }
+  };
+
+  const downloadMarkdown = (content: string, sid: string) => {
+    const isJson = isValidJson(content);
+    const md = isJson
+      ? `# FreeCouncil Response\n\n\`\`\`json\n${JSON.stringify(JSON.parse(content), null, 2)}\n\`\`\``
+      : `# FreeCouncil Response\n\n${content}`;
+    downloadFile(md, `freecouncil-${sid}-response.md`, 'text/markdown');
+    if (sid) apiClient.recordEvent(sid, 'export_triggered', 0, 'md');
+  };
+
+  const downloadCsv = (content: string, sid: string) => {
+    try {
+      const arr = JSON.parse(content) as Record<string, any>[];
+      if (!Array.isArray(arr) || arr.length === 0) return;
+      const headers = Object.keys(arr[0]);
+      const escape = (val: any): string => {
+        const s = String(val ?? '');
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const rows = [headers.join(','), ...arr.map(row => headers.map(h => escape(row[h])).join(','))].join('\n');
+      downloadFile(rows, `freecouncil-${sid}-response.csv`, 'text/csv');
+      if (sid) apiClient.recordEvent(sid, 'export_triggered', 0, 'csv');
+    } catch { /* invalid */ }
+  };
+
+  const fetchModelPerf = async () => {
+    try {
+      const res = await fetch('http://localhost:3001/api/v1/model-performance');
+      if (res.ok) setModelPerf(await res.json());
+    } catch { /* ignore */ }
+  };
+
+  const toggleModelPerf = async () => {
+    if (!showModelPerf) await fetchModelPerf();
+    setShowModelPerf(!showModelPerf);
   };
 
   const startNewChat = async () => {
@@ -415,7 +565,9 @@ export default function Home() {
         systemMode: routingMode,
         reasoningEffort,
         zdrRequired,
-        manualModelId: selectedModelId
+        manualModelId: selectedModelId,
+        structuredOutput: structuredOutputEnabled && activeModel?.capabilityFlags.includes('structured_output'),
+        jsonSchema: structuredOutputEnabled && jsonSchema ? jsonSchema : undefined
       };
 
       await apiClient.dispatchStream(
@@ -729,6 +881,58 @@ export default function Home() {
               </svg>
               New Chat
             </button>
+          </div>
+
+          {/* Presets Panel (#67) */}
+          <div className="border-b border-neutral-800 px-2 py-2">
+            <button
+              onClick={() => setShowPresetsPanel(!showPresetsPanel)}
+              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs font-semibold text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50 transition-colors"
+            >
+              <div className="flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                Presets
+              </div>
+              <svg className={`w-3.5 h-3.5 transform transition-transform ${showPresetsPanel ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {showPresetsPanel && (
+              <div className="mt-1.5 space-y-1 px-1">
+                {[...BUILT_IN_PRESETS, ...customPresets].map(preset => (
+                  <div key={preset.name} className="flex items-center gap-1">
+                    <button
+                      onClick={() => applyPreset(preset)}
+                      className="flex-1 text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors hover:bg-neutral-800 text-neutral-300"
+                    >
+                      <span className="font-medium">{preset.name}</span>
+                      <span className="text-neutral-500 text-[10px] ml-1.5">{preset.mode} · {preset.effort}</span>
+                      {preset.isBuiltIn && <span className="text-[9px] text-neutral-600 ml-1">(built-in)</span>}
+                    </button>
+                    {!preset.isBuiltIn && (
+                      <button
+                        onClick={() => deleteCustomPreset(preset.name)}
+                        className="p-1 text-neutral-600 hover:text-red-400 transition-colors rounded"
+                        title="Delete preset"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  onClick={saveAsPreset}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg text-[10px] text-violet-400 hover:bg-violet-500/10 transition-colors border border-dashed border-violet-500/30 mt-1"
+                >
+                  + Save current settings as preset
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Conversation History List */}
@@ -1057,12 +1261,78 @@ export default function Home() {
                 }`}>
                   {m.role === 'user' ? 'U' : 'A'}
                 </div>
-                <div className={`p-4 rounded-xl text-sm leading-relaxed max-w-full overflow-hidden ${
-                  m.role === 'user' ? 'bg-violet-500/10 text-neutral-200' : 'bg-neutral-900/40 text-neutral-300 border border-neutral-800'
-                }`}>
-                  <p className="whitespace-pre-wrap">{m.content}</p>
-                  {m.role === 'assistant' && m.trace && (
-                    <CouncilTrace trace={m.trace} />
+                <div className="flex flex-col gap-1.5 max-w-full">
+                  <div className={`p-4 rounded-xl text-sm leading-relaxed overflow-hidden ${
+                    m.role === 'user' ? 'bg-violet-500/10 text-neutral-200' : 'bg-neutral-900/40 text-neutral-300 border border-neutral-800'
+                  }`}>
+                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    {m.role === 'assistant' && m.trace && (
+                      <CouncilTrace
+                        trace={m.trace}
+                        onSwitchMode={(mode) => { setRoutingMode(mode); localDB.set('routing_mode', mode); }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Response toolbar — export & verify (#61-#64) */}
+                  {m.role === 'assistant' && m.content && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* Download Markdown — always visible */}
+                      <button
+                        onClick={() => downloadMarkdown(m.content, activeSessionId)}
+                        title="Download as Markdown"
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800 transition-colors border border-transparent hover:border-neutral-700"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        .md
+                      </button>
+
+                      {/* Download JSON — only when SO enabled and response is valid JSON */}
+                      {structuredOutputEnabled && isValidJson(m.content) && (
+                        <button
+                          onClick={() => downloadJson(m.content, activeSessionId)}
+                          title="Download as JSON"
+                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold text-emerald-500 hover:text-emerald-300 hover:bg-emerald-900/20 transition-colors border border-transparent hover:border-emerald-800/50"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          .json
+                        </button>
+                      )}
+
+                      {/* Download CSV — only when SO enabled and response is a flat JSON array */}
+                      {structuredOutputEnabled && isCsvEligible(m.content) && (
+                        <button
+                          onClick={() => downloadCsv(m.content, activeSessionId)}
+                          title="Download as CSV"
+                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold text-amber-500 hover:text-amber-300 hover:bg-amber-900/20 transition-colors border border-transparent hover:border-amber-800/50"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          .csv
+                        </button>
+                      )}
+
+                      {/* Verify — only when SO enabled (#61) */}
+                      {structuredOutputEnabled && (
+                        <button
+                          onClick={() => {
+                            if (activeSessionId) apiClient.recordEvent(activeSessionId, 'verification_pass_triggered', 1);
+                          }}
+                          title="Trigger verification pass"
+                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold text-violet-500 hover:text-violet-300 hover:bg-violet-900/20 transition-colors border border-transparent hover:border-violet-800/50"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Verify
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -1450,6 +1720,87 @@ export default function Home() {
             ) : (
               <span className="text-xs text-neutral-500 italic block">No active model configuration details.</span>
             )}
+
+            {/* Structured Output Workbench — gated on model capability (#56/#57/#58) */}
+            {activeModel?.capabilityFlags.includes('structured_output') && (
+              <div className="border-t border-neutral-800 pt-4 space-y-4">
+                <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block">Structured Output</span>
+
+                {/* Toggle */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-semibold text-neutral-300">JSON Mode</span>
+                    <p className="text-[10px] text-neutral-500 mt-0.5">Force structured JSON response</p>
+                  </div>
+                  <button
+                    onClick={() => handleStructuredOutputToggle(!structuredOutputEnabled)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      structuredOutputEnabled ? 'bg-emerald-600' : 'bg-neutral-800'
+                    }`}
+                  >
+                    <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      structuredOutputEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`} />
+                  </button>
+                </div>
+
+                {/* JSON Schema Editor — visible when toggle is on */}
+                {structuredOutputEnabled && (
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-semibold text-neutral-400">JSON Schema (optional)</span>
+                    <textarea
+                      value={jsonSchemaText}
+                      onChange={(e) => handleJsonSchemaChange(e.target.value)}
+                      placeholder={'{\n  "type": "object",\n  "properties": {...}\n}'}
+                      rows={6}
+                      className="w-full bg-neutral-950 border border-neutral-800 focus:border-emerald-500/50 rounded-lg px-3 py-2 text-[10px] font-mono text-neutral-200 focus:outline-none resize-y"
+                    />
+                    {jsonSchemaError && (
+                      <p className="text-[10px] text-red-400">{jsonSchemaError}</p>
+                    )}
+                    {!jsonSchemaError && jsonSchema && (
+                      <p className="text-[10px] text-emerald-500">Schema valid</p>
+                    )}
+                    {!jsonSchemaText && (
+                      <p className="text-[10px] text-neutral-600">Leave empty for generic JSON object mode</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Model Performance (#85) */}
+            <div className="border-t border-neutral-800 pt-4">
+              <button
+                onClick={toggleModelPerf}
+                className="w-full flex items-center justify-between text-[10px] font-bold text-neutral-500 uppercase tracking-widest hover:text-neutral-300 transition-colors"
+              >
+                <span>Model Performance</span>
+                <svg className={`w-3.5 h-3.5 transform transition-transform ${showModelPerf ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {showModelPerf && (
+                <div className="mt-3 space-y-1.5">
+                  {modelPerf.length === 0 ? (
+                    <span className="text-[10px] text-neutral-600 italic">No S score data yet. Run council sessions to populate.</span>
+                  ) : (
+                    modelPerf.slice(0, 10).map(m => (
+                      <div key={m.modelId} className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-neutral-400 font-mono truncate flex-1" title={m.modelId}>
+                          {m.modelId.split('/').pop()}
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[10px] font-mono text-violet-400">{m.avgScore.toFixed(2)}</span>
+                          <span className="text-[9px] text-neutral-600">({m.sessionCount})</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
 
           </div>
 
