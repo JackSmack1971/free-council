@@ -6,6 +6,7 @@ import { PreflightGate } from '../modules/preflightGate.js';
 import { ConversationStore } from '../modules/conversationStore.js';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
+import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 
 export const apiRouter = Router();
@@ -45,24 +46,41 @@ const requireApiKey = (req: Request, res: Response, next: () => void) => {
 // POST /session
 apiRouter.post('/session', (req: Request, res: Response) => {
   const { modelId, mode } = req.body;
-  if (!modelId || mode !== 'solo') {
-    return res.status(400).json({ error: 'Invalid modelId or mode. Only solo mode is supported in Phase 1.' });
+  if (!mode || (mode !== 'solo' && mode !== 'council')) {
+    return res.status(400).json({ error: 'Invalid mode. Supported modes: solo, council.' });
   }
 
-  // Validate modelId exists in current catalog snapshot
-  const freeModels = ModelPoolManager.getFreeModels();
-  const exists = freeModels.some(m => m.modelId === modelId);
-  if (!exists) {
-    return res.status(400).json({ error: `Unknown or unavailable model: ${modelId}` });
+  let activeModelId = modelId;
+  if (mode === 'solo') {
+    if (!modelId) {
+      return res.status(400).json({ error: 'modelId is required for solo mode.' });
+    }
+    // Validate modelId exists in current catalog snapshot
+    const freeModels = ModelPoolManager.getFreeModels();
+    const exists = freeModels.some(m => m.modelId === modelId);
+    if (!exists) {
+      return res.status(400).json({ error: `Unknown or unavailable model: ${modelId}` });
+    }
+  } else {
+    // Council Mode
+    if (!activeModelId) {
+      activeModelId = 'openrouter/free'; // Default meta-LLM
+    } else {
+      const freeModels = ModelPoolManager.getFreeModels();
+      const exists = freeModels.some(m => m.modelId === activeModelId);
+      if (!exists) {
+        return res.status(400).json({ error: `Unknown or unavailable model: ${activeModelId}` });
+      }
+    }
   }
 
   const sessionId = crypto.randomUUID();
-  const session: SessionState = { sessionId, modelId, mode };
+  const session: SessionState = { sessionId, modelId: activeModelId, mode };
   sessions.set(sessionId, session);
 
   res.status(201).json({
     sessionId,
-    modelId,
+    modelId: activeModelId,
     mode
   });
 });
@@ -115,6 +133,51 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
 
   const authHeader = req.headers.authorization || '';
   const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (session.mode === 'council') {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    let assistantResponse = '';
+
+    await dispatchCouncilChat({
+      sessionId,
+      messages,
+      runSettings: settings,
+      apiKey,
+      onChunk: (chunk) => {
+        res.write(chunk);
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(dataStr);
+              const content = parsed.choices?.[0]?.delta?.content || '';
+              assistantResponse += content;
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+      },
+      onError: (err) => {
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
+      },
+      onComplete: () => {
+        const updatedMessages = [
+          ...messages,
+          { role: 'assistant', content: assistantResponse }
+        ];
+        ConversationStore.saveConversation(sessionId, updatedMessages);
+        res.end();
+      }
+    });
+    return;
+  }
 
   // Get current model metadata
   const freeModels = ModelPoolManager.getFreeModels();
