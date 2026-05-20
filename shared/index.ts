@@ -63,6 +63,7 @@ export interface AgentPlan {
     proposersPerLayer: number;
     aggregatorModelId: string;
   };
+  reasoningEffort?: 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 }
 
 export interface AgentResult {
@@ -71,6 +72,9 @@ export interface AgentResult {
   response: string;
   latency?: number;
   error?: string;
+  isPrimary?: boolean;
+  sScore?: number;
+  status?: 'generating' | 'evaluating' | 'completed' | 'failed';
 }
 
 export interface PreflightContext {
