@@ -2,6 +2,42 @@ import { AgentPlan, AgentResult, AgentAssignment } from 'shared';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 
+async function fetchWithRateLimitBackoff(
+  url: string,
+  options: RequestInit,
+  apiKey: string,
+  sessionId: string | undefined,
+  maxRetries: number = 2
+): Promise<Response> {
+  let retryCount = 0;
+  while (true) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (response.status !== 429 || retryCount >= maxRetries) {
+      return response;
+    }
+    retryCount++;
+    if (sessionId) {
+      TelemetryEngine.record({
+        session_id: sessionId,
+        event_type: 'retry',
+        synthesis_rationale: `429_rate_limit attempt ${retryCount}`,
+        ts: Date.now()
+      });
+    }
+    const retryAfter = response.headers.get('Retry-After');
+    const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.pow(2, retryCount) * 1000;
+    console.log(`[AgentOrchestrator] 429 rate limit. Waiting ${waitMs}ms (retry ${retryCount}/${maxRetries})`);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+}
+
 async function callAgentWithTimeoutAndRetry(
   agent: AgentAssignment,
   prompt: string,
@@ -15,25 +51,27 @@ async function callAgentWithTimeoutAndRetry(
 
   while (attempts < maxAttempts) {
     attempts++;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'http://localhost:3000',
-          'X-Title': 'FreeCouncil'
+      const response = await fetchWithRateLimitBackoff(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'http://localhost:3000',
+            'X-Title': 'FreeCouncil'
+          },
+          body: JSON.stringify({
+            model: agent.modelId,
+            messages: [{ role: 'user', content: prompt }],
+            temperature
+          })
         },
-        body: JSON.stringify({
-          model: agent.modelId,
-          messages: [{ role: 'user', content: prompt }],
-          temperature
-        }),
-        signal: controller.signal
-      });
+        apiKey,
+        sessionId
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -45,7 +83,6 @@ async function callAgentWithTimeoutAndRetry(
         throw new Error('Empty response from model');
       }
 
-      clearTimeout(timeoutId);
       const usedFallback = attempts > 1;
       if (usedFallback && sessionId) {
         TelemetryEngine.record({
@@ -57,7 +94,6 @@ async function callAgentWithTimeoutAndRetry(
       }
       return { text, usedFallback, failureReason: usedFallback ? firstFailureReason : undefined };
     } catch (err: any) {
-      clearTimeout(timeoutId);
       const isTimeout = err.name === 'AbortError';
       if (attempts === 1) {
         firstFailureReason = isTimeout ? 'timeout' : `HTTP error: ${err.message}`;

@@ -18,6 +18,10 @@ interface CouncilDispatchOptions {
   onComplete: () => void;
 }
 
+function sseEvent(obj: object): string {
+  return `data: ${JSON.stringify(obj)}\n\n`;
+}
+
 export async function dispatchCouncilChat(options: CouncilDispatchOptions): Promise<void> {
   const {
     sessionId,
@@ -39,7 +43,26 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       /\b(code|function|class|implement|solve|math|calculate|algorithm|write|create|design)\b/i.test(query);
     const promptClass = isNontrivial ? 'complex' : 'simple';
 
-    // 3. Determine reasoning effort
+    // 3. Determine routing mode
+    const routingMode = (runSettings.routingMode || 'adaptive').toLowerCase();
+
+    // 4. Manual mode: bypass RouterAgent, use solo dispatch
+    if (routingMode === 'manual') {
+      TelemetryEngine.record({
+        session_id: sessionId,
+        event_type: 'routed_to_solo',
+        api_calls: 1,
+        ts: Date.now()
+      });
+      await dispatchSoloChat({
+        ...options,
+        modelId: runSettings.manualModelId || 'meta-llama/llama-3.3-70b-instruct:free',
+        freeLockEnabled: runSettings.freeLockEnabled !== false
+      });
+      return;
+    }
+
+    // 5. Determine reasoning effort
     let effort = runSettings.reasoningEffort || 'Adaptive';
 
     // Adaptive mode resolution
@@ -61,10 +84,15 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       }
     }
 
-    // 4. Route based on reasoning effort and prompt complexity
+    // 6. Route based on reasoning effort and prompt complexity
     if ((effort === 'Balanced' || effort === 'Deep') && promptClass === 'simple') {
-      // Fallback to Solo mode for simple prompts in Balanced/Deep
       console.log(`[councilDispatch] Simple prompt in ${effort} mode. Falling back to Solo Mode.`);
+      TelemetryEngine.record({
+        session_id: sessionId,
+        event_type: 'routed_to_solo',
+        api_calls: 1,
+        ts: Date.now()
+      });
       await dispatchSoloChat({
         ...options,
         modelId: 'meta-llama/llama-3.3-70b-instruct:free',
@@ -73,15 +101,18 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       return;
     }
 
-    // 5. Run RouterAgent GoA node sampling to get the plan
+    // 7. Run RouterAgent GoA node sampling to get the plan
     const freeModels = ModelPoolManager.getFreeModels();
     const k = runSettings.proposerCount || 3;
     const containsUpload = !!runSettings.containsUpload;
     const plan = await RouterAgent.sampleAgents(query, freeModels, k, apiKey, containsUpload);
     plan.reasoningEffort = effort as 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 
-    // 6. PreflightGate Check
-    const activeModelId = 'openrouter/free'; // Use fallback meta-LLM
+    // Emit plan event (budget preview before dispatch)
+    onChunk(sseEvent({ type: 'plan', plan }));
+
+    // 8. PreflightGate Check
+    const activeModelId = 'openrouter/free';
     const hasProviderLogged = plan.agents.some(a => {
       const metadata = freeModels.find(m => m.modelId === a.modelId);
       return metadata ? metadata.is_provider_logged : false;
@@ -112,11 +143,38 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
 
     const gateResult = PreflightGate.check(preflightCtx);
     if (!gateResult.allowed) {
-      onError(new Error(`Preflight check failed: ${gateResult.violation}`));
-      return;
+      if (gateResult.violation === 'AGENT_CAP_VIOLATION') {
+        // Truncate plan to 5, but allow
+        plan.agents = plan.agents.slice(0, 5);
+        TelemetryEngine.record({
+          session_id: sessionId,
+          event_type: 'cap_enforcement',
+          agent_count: plan.agents.length,
+          ts: Date.now()
+        });
+      } else if (gateResult.violation === 'BUDGET_VIOLATION') {
+        TelemetryEngine.record({
+          session_id: sessionId,
+          event_type: 'budget_violation',
+          ts: Date.now()
+        });
+        onChunk(sseEvent({ type: 'error', message: `Preflight check failed: ${gateResult.violation}` }));
+        onError(new Error(`Preflight check failed: ${gateResult.violation}`));
+        return;
+      } else {
+        TelemetryEngine.record({
+          session_id: sessionId,
+          event_type: 'policy_violation',
+          synthesis_rationale: gateResult.violation,
+          ts: Date.now()
+        });
+        onChunk(sseEvent({ type: 'error', message: `Preflight check failed: ${gateResult.violation}` }));
+        onError(new Error(`Preflight check failed: ${gateResult.violation}`));
+        return;
+      }
     }
 
-    // 7. Build enriched query with FTS5 context if uploads are present
+    // 9. Build enriched query with FTS5 context if uploads are present
     let enrichedQuery = query;
     if (containsUpload && runSettings.uploadDisclosureAcknowledged) {
       const chunks = FtsSearchService.searchFileContent(sessionId, query, 5);
@@ -129,48 +187,105 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       }
     }
 
-    // 8. Execute GoA-lite via AgentOrchestrator
+    // 10. Emit routed_to_council telemetry
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'routed_to_council',
+      agent_count: plan.agents.length,
+      api_calls: plan.totalApiCalls,
+      ts: Date.now()
+    });
+
+    // 11. Execute GoA-lite via AgentOrchestrator
     const generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId);
 
     let primaryResult: AgentResult | null = null;
     const completedResults: AgentResult[] = [];
-    let edgeMatrix: any = null;
+    const seenStarted = new Set<string>();
+    const finalResults: AgentResult[] = [];
 
     for await (const chunk of generator) {
-      // Stream intermediate status/progress to client
-      if (chunk.status === 'generating' || chunk.status === 'evaluating') {
-        onChunk(`data: ${JSON.stringify({ type: 'agent_progress', role: chunk.role, status: chunk.status })}\n\n`);
+      if (chunk.status === 'generating') {
+        // Emit agent_start once per role
+        if (!seenStarted.has(chunk.role)) {
+          seenStarted.add(chunk.role);
+          onChunk(sseEvent({ type: 'agent_start', agentId: chunk.role, role: chunk.role, modelId: chunk.modelId }));
+        }
+      } else if (chunk.status === 'evaluating') {
+        // Scoring pass in progress — no extra event needed (covered by agent_start already)
       } else if (chunk.status === 'completed') {
+        completedResults.push(chunk);
+        // Emit agent_done
+        onChunk(sseEvent({
+          type: 'agent_done',
+          agentId: chunk.role,
+          response: (chunk.response || '').slice(0, 200) // truncated preview
+        }));
+      } else if (chunk.status === 'failed') {
+        // Emit error for failed agent but continue
+        onChunk(sseEvent({ type: 'agent_done', agentId: chunk.role, response: '', error: chunk.error }));
+      }
+
+      // Collect final results (those with sScore set = final scoring pass)
+      if (chunk.sScore !== undefined) {
+        finalResults.push(chunk);
         if (chunk.isPrimary) {
           primaryResult = chunk;
         }
-        completedResults.push(chunk);
       }
     }
 
-    // Retrieve recorded edge matrix from the database to stream to client
+    // Emit s_scores if we have final scored results (non-Fast mode)
+    if (finalResults.length > 0 && effort !== 'Fast') {
+      const scores: Record<string, number> = {};
+      const prunedIds: string[] = [];
+      for (const r of finalResults) {
+        scores[r.role] = r.sScore ?? 0;
+        if ((r.sScore ?? 0) < 0.05) {
+          prunedIds.push(r.role);
+        }
+      }
+      onChunk(sseEvent({ type: 's_scores', scores }));
+      if (prunedIds.length > 0) {
+        onChunk(sseEvent({ type: 'pruned', agentIds: prunedIds }));
+      }
+      if (primaryResult) {
+        onChunk(sseEvent({ type: 'selected', agentId: primaryResult.role }));
+      }
+    }
+
+    // Determine primary result
+    if (!primaryResult) {
+      if (finalResults.length > 0) {
+        primaryResult = finalResults.find(r => r.isPrimary) || finalResults[0];
+      } else if (completedResults.length > 0) {
+        primaryResult = completedResults[0];
+      }
+    }
+
+    if (!primaryResult) {
+      throw new Error('No successful responses from council agents.');
+    }
+
+    // Emit final response tokens (in response event format)
+    onChunk(sseEvent({ type: 'response', content: primaryResult.response }));
+    // Also emit in solo-compatible choices delta format for backward compatibility
+    onChunk(sseEvent({ choices: [{ delta: { content: primaryResult.response } }] }));
+
+    // Build edge matrix from DB record
+    let edgeMatrix: any = null;
     const row = db.prepare('SELECT edge_matrix_json FROM session_events WHERE session_id = ? AND event_type = ? ORDER BY ts DESC LIMIT 1')
       .get(sessionId, 'routed_to_council') as { edge_matrix_json: string | null } | undefined;
-
     if (row && row.edge_matrix_json) {
       edgeMatrix = JSON.parse(row.edge_matrix_json);
     }
 
-    // Stream final response to client in choices delta content format
-    if (primaryResult) {
-      onChunk(`data: ${JSON.stringify({ choices: [{ delta: { content: primaryResult.response } }] })}\n\n`);
-    } else if (completedResults.length > 0) {
-      primaryResult = completedResults[0];
-      onChunk(`data: ${JSON.stringify({ choices: [{ delta: { content: primaryResult.response } }] })}\n\n`);
-    } else {
-      throw new Error('No successful responses from council agents.');
-    }
-
-    // Stream final trace metadata
+    // Emit trace event
+    const allResults = finalResults.length > 0 ? finalResults : completedResults;
     const traceInfo = {
       type: 'trace',
       trace: {
-        agents: completedResults.map(r => ({
+        agents: allResults.map(r => ({
           role: r.role,
           modelId: r.modelId,
           sScore: r.sScore,
@@ -183,9 +298,9 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
         edgeMatrix
       }
     };
-    onChunk(`data: ${JSON.stringify(traceInfo)}\n\n`);
+    onChunk(sseEvent(traceInfo));
 
-    // Record telemetry event: completed_in_council
+    // Record telemetry: completed_in_council
     TelemetryEngine.record({
       session_id: sessionId,
       event_type: 'completed_in_council',
@@ -195,6 +310,13 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
 
     onComplete();
   } catch (err: any) {
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'policy_violation',
+      synthesis_rationale: err.message,
+      ts: Date.now()
+    });
+    onChunk(sseEvent({ type: 'error', message: err.message }));
     onError(err);
   }
 }

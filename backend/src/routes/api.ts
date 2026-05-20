@@ -136,7 +136,14 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization || '';
   const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
-  if (session.mode === 'council') {
+  // Detect routing/system mode from request body
+  const routingMode = (settings.routingMode || 'adaptive').toLowerCase();
+  const systemMode = (settings.systemMode || session.mode || 'council').toLowerCase();
+
+  // Council mode: when session is council AND not manual routing AND not overridden to solo
+  const useCouncil = systemMode === 'council' && routingMode !== 'manual';
+
+  if (useCouncil) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -147,7 +154,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     await dispatchCouncilChat({
       sessionId,
       messages,
-      runSettings: settings,
+      runSettings: { ...settings, routingMode, manualModelId: session.modelId },
       apiKey,
       onChunk: (chunk) => {
         res.write(chunk);
@@ -326,6 +333,30 @@ apiRouter.get('/sessions', (req: Request, res: Response) => {
     res.json({ sessions: rows });
   } catch (err) {
     res.status(500).json({ error: 'Failed to query sessions list' });
+  }
+});
+
+// PATCH /session/:id/revert — abort council session and record reverted_to_solo
+apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
+  const sessionId = req.params.id;
+  if (!sessions.has(sessionId) && !sessionId) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  try {
+    TelemetryEngine.record({
+      session_id: sessionId,
+      event_type: 'reverted_to_solo',
+      api_calls: 0,
+      ts: Date.now()
+    });
+    // Update session mode to solo
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.mode = 'solo';
+    }
+    return res.json({ success: true, sessionId });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to record revert event' });
   }
 });
 
