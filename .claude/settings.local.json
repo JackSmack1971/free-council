@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh label *)",
+      "PowerShell(gh label *)",
+      "PowerShell(Get-Command *)"
+    ]
+  }
+}
