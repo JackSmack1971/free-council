@@ -101,7 +101,9 @@ apiRouter.get('/models', requireApiKey, (req: Request, res: Response) => {
       capabilityFlags: [
         ...(model.coding ? ['coding'] : []),
         ...(model.reasoning ? ['reasoning'] : []),
-        ...(model.vision ? ['vision'] : [])
+        ...(model.vision ? ['vision'] : []),
+        ...(model.pdf_input ? ['pdf_input'] : []),
+        ...(model.image_input ? ['image_input'] : [])
       ],
       controls: SettingsDeriver.deriveControls(model)
     };

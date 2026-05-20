@@ -43,6 +43,11 @@ export default function Home() {
   const [routingMode, setRoutingMode] = useState<'solo' | 'council'>('council');
   const [showRollbackBanner, setShowRollbackBanner] = useState(false);
 
+  // File Upload States
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string; size: number; type: string; file: File }[]>([]);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
+
   // Quota States
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
@@ -91,6 +96,38 @@ export default function Home() {
       previewLoggedSessionRef.current = activeSessionId;
     }
   }, [activeSessionId]);
+
+  // File Upload Handlers
+  const handleFileSelection = (e: React.ChangeEvent<HTMLInputElement>, category: 'pdf' | 'image') => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const newAttached: { name: string; size: number; type: string; file: File }[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      newAttached.push({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        file: file
+      });
+    }
+
+    setAttachedFiles(prev => [...prev, ...newAttached]);
+    e.target.value = '';
+  };
+
+  const removeAttachedFile = (index: number) => {
+    setAttachedFiles(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const triggerDocUpload = () => {
+    docInputRef.current?.click();
+  };
+
+  const triggerImgUpload = () => {
+    imgInputRef.current?.click();
+  };
 
   const initializeData = async () => {
     // Load API Key
@@ -432,6 +469,8 @@ export default function Home() {
 
   const activeModel = models.find(m => m.modelId === selectedModelId);
   const isModelUnavailable = unavailableModels.includes(selectedModelId);
+  const hasPdfCapability = activeModel?.capabilityFlags.includes('pdf_input') ?? false;
+  const hasImageCapability = activeModel?.capabilityFlags.includes('image_input') ?? false;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex font-sans overflow-hidden">
@@ -827,6 +866,50 @@ export default function Home() {
         {/* Prompt Input Area */}
         <div className="p-6 border-t border-neutral-800 bg-neutral-900/10 backdrop-blur-md">
           <form onSubmit={submitPrompt} className="max-w-3xl mx-auto space-y-2">
+            <input
+              type="file"
+              ref={docInputRef}
+              onChange={(e) => handleFileSelection(e, 'pdf')}
+              accept=".pdf,.txt,.md,.json"
+              className="hidden"
+            />
+            <input
+              type="file"
+              ref={imgInputRef}
+              onChange={(e) => handleFileSelection(e, 'image')}
+              accept="image/*"
+              className="hidden"
+            />
+
+            {/* Attached Files List */}
+            {attachedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 p-2 bg-neutral-900/50 rounded-lg border border-neutral-800">
+                {attachedFiles.map((file, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-neutral-850 border border-neutral-800 text-xs text-neutral-305">
+                    {file.type.startsWith('image/') ? (
+                      <svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3.5 h-3.5 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    )}
+                    <span className="font-medium truncate max-w-[150px]">{file.name}</span>
+                    <span className="text-[10px] text-neutral-500">({(file.size / 1024).toFixed(1)} KB)</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachedFile(idx)}
+                      className="text-neutral-500 hover:text-neutral-300 ml-1 focus:outline-none"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             
             {/* Input fields and send button */}
             <div className="relative rounded-xl border border-neutral-850 bg-neutral-900/60 shadow-lg focus-within:border-violet-500/50 transition-colors overflow-hidden">
@@ -846,17 +929,70 @@ export default function Home() {
               />
               <div className="flex justify-between items-center px-4 py-3 bg-neutral-900/40 border-t border-neutral-850">
                 
-                {/* Budget Preview */}
-                <div className="text-[11px] text-neutral-500 font-medium flex items-center gap-1">
-                  <svg className="w-3.5 h-3.5 text-neutral-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>This request will use 1 free API call(s)</span>
+                <div className="flex items-center gap-4">
+                  {/* Budget Preview */}
+                  <div className="text-[11px] text-neutral-500 font-medium flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5 text-neutral-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>This request will use 1 free API call(s)</span>
+                  </div>
+
+                  {/* Attachment Toolbar Buttons */}
+                  <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-4">
+                    {/* Document Upload Button */}
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        id="upload-doc-btn"
+                        onClick={triggerDocUpload}
+                        disabled={isStreaming || !hasPdfCapability}
+                        className={`p-1.5 rounded-lg border transition-all ${
+                          hasPdfCapability
+                            ? 'bg-neutral-850 border-neutral-700 hover:bg-neutral-750 text-neutral-200 hover:text-white'
+                            : 'bg-neutral-900 border-neutral-850 text-neutral-600 cursor-not-allowed opacity-50'
+                        }`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </button>
+                      {!hasPdfCapability && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-neutral-950 text-neutral-400 text-[10px] p-2 rounded-lg border border-neutral-800 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none text-center">
+                          Model does not support document input
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Image Upload Button */}
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        id="upload-image-btn"
+                        onClick={triggerImgUpload}
+                        disabled={isStreaming || !hasImageCapability}
+                        className={`p-1.5 rounded-lg border transition-all ${
+                          hasImageCapability
+                            ? 'bg-neutral-850 border-neutral-700 hover:bg-neutral-750 text-neutral-200 hover:text-white'
+                            : 'bg-neutral-900 border-neutral-850 text-neutral-600 cursor-not-allowed opacity-50'
+                        }`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </button>
+                      {!hasImageCapability && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-neutral-950 text-neutral-400 text-[10px] p-2 rounded-lg border border-neutral-800 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none text-center">
+                          Model does not support image input
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <button
                   type="submit"
-                  disabled={isStreaming || !inputPrompt.trim()}
+                  disabled={isStreaming || (!inputPrompt.trim() && attachedFiles.length === 0)}
                   className="px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold transition-colors disabled:bg-neutral-800 disabled:text-neutral-500 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
                   <span>Send</span>
