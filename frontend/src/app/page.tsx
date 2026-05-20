@@ -4,6 +4,19 @@ import { useState, useEffect, useRef } from 'react';
 import { localDB } from '../utils/db';
 import { apiClient, ModelInfo, QuotaInfo } from '../utils/api';
 import CouncilTrace from '../components/CouncilTrace';
+import AgentProgressPanel from '../components/AgentProgressPanel';
+import OnboardingModal from '../components/OnboardingModal';
+
+interface AgentCard {
+  agentId: string;
+  role: string;
+  modelId?: string;
+  status: 'pending' | 'generating' | 'done' | 'failed';
+  responseExcerpt?: string;
+  sScore?: number;
+  isPruned?: boolean;
+  isSelected?: boolean;
+}
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
@@ -43,7 +56,18 @@ export default function Home() {
 
   // Routing Mode & Rollback States
   const [routingMode, setRoutingMode] = useState<'solo' | 'council'>('council');
+  const [dispatchMode, setDispatchMode] = useState<'adaptive' | 'manual'>('adaptive');
+  const [reasoningEffort, setReasoningEffort] = useState<'Fast' | 'Balanced' | 'Deep' | 'Adaptive'>('Adaptive');
+  const [zdrRequired, setZdrRequired] = useState<boolean>(false);
   const [showRollbackBanner, setShowRollbackBanner] = useState(false);
+
+  // Council SSE Progress State
+  const [agentCards, setAgentCards] = useState<AgentCard[]>([]);
+  const activeStreamRef = useRef<(() => void) | null>(null); // abort handle
+  const activeSessionRef = useRef<string>('');
+
+  // Onboarding State
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   // File Upload States
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; size: number; type: string; file: File }[]>([]);
@@ -132,6 +156,12 @@ export default function Home() {
   };
 
   const initializeData = async () => {
+    // Check onboarding completion
+    const onboardingDone = await localDB.get<boolean>('onboarding_complete');
+    if (!onboardingDone) {
+      setShowOnboarding(true);
+    }
+
     // Load API Key
     const savedKey = await localDB.get<string>('api_key');
     if (savedKey) {
@@ -146,6 +176,16 @@ export default function Home() {
     const savedLock = await localDB.get<boolean>('free_lock_enabled');
     setFreeLockEnabled(savedLock !== null ? savedLock : true);
 
+    // Load routing/effort/ZDR settings
+    const savedDispatchMode = await localDB.get<'adaptive' | 'manual'>('dispatch_mode');
+    if (savedDispatchMode) setDispatchMode(savedDispatchMode);
+
+    const savedReasoningEffort = await localDB.get<'Fast' | 'Balanced' | 'Deep' | 'Adaptive'>('reasoning_effort');
+    if (savedReasoningEffort) setReasoningEffort(savedReasoningEffort);
+
+    const savedZdr = await localDB.get<boolean>('zdr_required');
+    if (savedZdr !== null) setZdrRequired(!!savedZdr);
+
     // Fetch Config
     await fetchConfig();
 
@@ -154,6 +194,27 @@ export default function Home() {
 
     // Fetch Sessions List
     fetchSessions();
+  };
+
+  const completeOnboarding = async () => {
+    await localDB.set('onboarding_complete', true);
+    setShowOnboarding(false);
+    if (!apiKey) setShowKeyModal(true);
+  };
+
+  const handleDispatchModeChange = async (mode: 'adaptive' | 'manual') => {
+    setDispatchMode(mode);
+    await localDB.set('dispatch_mode', mode);
+  };
+
+  const handleReasoningEffortChange = async (effort: 'Fast' | 'Balanced' | 'Deep' | 'Adaptive') => {
+    setReasoningEffort(effort);
+    await localDB.set('reasoning_effort', effort);
+  };
+
+  const handleZdrToggle = async (val: boolean) => {
+    setZdrRequired(val);
+    await localDB.set('zdr_required', val);
   };
 
   const fetchQuota = async () => {
@@ -295,6 +356,26 @@ export default function Home() {
     }
   };
 
+  const cancelCouncil = async () => {
+    // Abort the active stream
+    if (activeStreamRef.current) {
+      activeStreamRef.current();
+      activeStreamRef.current = null;
+    }
+    const sid = activeSessionRef.current || activeSessionId;
+    if (sid) {
+      await apiClient.revertSession(sid).catch(() => {});
+    }
+    setIsStreaming(false);
+    setIsWaitingFirstToken(false);
+    setStreamingText('');
+    setActiveProgress([]);
+    setAgentCards([]);
+    setActiveTrace(null);
+    setChatError('Council session cancelled — switched to Solo Mode.');
+    setRoutingMode('solo');
+  };
+
   const submitPrompt = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputPrompt.trim() || isStreaming) return;
@@ -309,25 +390,32 @@ export default function Home() {
     setIsStreaming(true);
     setIsWaitingFirstToken(true);
     setStreamingText('');
+    setAgentCards([]);
 
     let currentSessionId = activeSessionId;
-
     let localTrace: any = null;
+    let localStreamText = '';
 
     try {
       // Create session on-demand if not already active
       if (!currentSessionId) {
         currentSessionId = await apiClient.createSession(selectedModelId, routingMode);
         setActiveSessionId(currentSessionId);
+        activeSessionRef.current = currentSessionId;
       }
 
-      // Merge run settings + freeLockEnabled
+      // Merge run settings + all new settings
       const settingsPayload = {
         ...modelSettings,
         freeLockEnabled,
         privacyDisclosureAcknowledged: acknowledgedModels.includes(selectedModelId) || acknowledgedModels.includes('council_acknowledged'),
         containsUpload: attachedFiles.length > 0,
-        uploadDisclosureAcknowledged
+        uploadDisclosureAcknowledged,
+        routingMode: dispatchMode,
+        systemMode: routingMode,
+        reasoningEffort,
+        zdrRequired,
+        manualModelId: selectedModelId
       };
 
       await apiClient.dispatchStream(
@@ -337,9 +425,11 @@ export default function Home() {
         apiKey,
         (token) => {
           setIsWaitingFirstToken(false);
+          localStreamText += token;
           setStreamingText(prev => prev + token);
         },
         (event) => {
+          // Legacy agent_progress support
           if (event.type === 'agent_progress') {
             setActiveProgress(prev => {
               const existing = prev.findIndex(p => p.role === event.role);
@@ -351,17 +441,67 @@ export default function Home() {
                 return [...prev, { role: event.role, status: event.status }];
               }
             });
+          }
+          // New Council SSE events
+          else if (event.type === 'plan') {
+            // Plan received — update budget preview if needed
+          } else if (event.type === 'agent_start') {
+            setAgentCards(prev => {
+              if (prev.some(c => c.agentId === event.agentId)) return prev;
+              return [...prev, {
+                agentId: event.agentId,
+                role: event.role || event.agentId,
+                modelId: event.modelId,
+                status: 'generating'
+              }];
+            });
+          } else if (event.type === 'agent_token') {
+            setAgentCards(prev => prev.map(c =>
+              c.agentId === event.agentId
+                ? { ...c, responseExcerpt: ((c.responseExcerpt || '') + (event.token || '')).slice(0, 200) }
+                : c
+            ));
+          } else if (event.type === 'agent_done') {
+            setAgentCards(prev => prev.map(c =>
+              c.agentId === event.agentId
+                ? { ...c, status: event.error ? 'failed' : 'done', responseExcerpt: (event.response || '').slice(0, 200) }
+                : c
+            ));
+          } else if (event.type === 's_scores') {
+            const scores = event.scores as Record<string, number>;
+            setAgentCards(prev => prev.map(c => ({
+              ...c,
+              sScore: scores[c.agentId] ?? scores[c.role] ?? c.sScore
+            })));
+          } else if (event.type === 'pruned') {
+            const pruned = new Set<string>(event.agentIds || []);
+            setAgentCards(prev => prev.map(c => ({
+              ...c,
+              isPruned: pruned.has(c.agentId) || pruned.has(c.role)
+            })));
+          } else if (event.type === 'selected') {
+            setAgentCards(prev => prev.map(c => ({
+              ...c,
+              isSelected: c.agentId === event.agentId || c.role === event.agentId
+            })));
+          } else if (event.type === 'response') {
+            // Final response tokens streamed via response event
+            setIsWaitingFirstToken(false);
           } else if (event.type === 'trace') {
             localTrace = event.trace;
             setActiveTrace(event.trace);
+          } else if (event.type === 'error') {
+            setChatError(event.message || 'Council routing error');
           }
         }
       );
 
       // Finished stream
-      setMessages(prev => [...prev, { role: 'assistant', content: streamingText, trace: localTrace }]);
+      const finalContent = localStreamText || streamingText;
+      setMessages(prev => [...prev, { role: 'assistant', content: finalContent, trace: localTrace }]);
       setStreamingText('');
       setActiveProgress([]);
+      setAgentCards([]);
       setActiveTrace(null);
       setIsStreaming(false);
 
@@ -383,10 +523,18 @@ export default function Home() {
         setIsWaitingFirstToken(false);
         return;
       }
+      if (err.message && err.message.includes('ZDR_REQUIRED_UNAVAILABLE')) {
+        setChatError('ZDR mode is ON — selected model does not support Zero Data Retention. Select a ZDR-compatible model or disable ZDR in Run Settings.');
+        setIsStreaming(false);
+        setIsWaitingFirstToken(false);
+        setAgentCards([]);
+        return;
+      }
       setChatError(err.message || 'An error occurred during completion dispatch.');
       setIsStreaming(false);
       setIsWaitingFirstToken(false);
       setActiveProgress([]);
+      setAgentCards([]);
       setActiveTrace(null);
       fetchQuota();
     }
@@ -670,6 +818,16 @@ export default function Home() {
             </button>
           </div>
 
+          {/* Privacy & Data link */}
+          <div className="pt-1">
+            <button
+              onClick={() => setShowOnboarding(true)}
+              className="w-full text-center py-1 text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Privacy &amp; Data
+            </button>
+          </div>
+
         </div>
       </aside>
 
@@ -730,7 +888,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Mode Selection Segmented Control */}
+            {/* System Mode Segmented Control */}
             <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-lg border border-neutral-800 ml-2">
               <button
                 type="button"
@@ -746,7 +904,7 @@ export default function Home() {
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                Solo Mode
+                Solo
               </button>
               <button
                 type="button"
@@ -762,8 +920,48 @@ export default function Home() {
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                Council Mode
+                Council
               </button>
+            </div>
+
+            {/* Routing sub-mode (adaptive vs manual) */}
+            {routingMode === 'council' && (
+              <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-lg border border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => !isStreaming && handleDispatchModeChange('adaptive')}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                    dispatchMode === 'adaptive' ? 'bg-violet-600/70 text-violet-100' : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  GoA
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !isStreaming && handleDispatchModeChange('manual')}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                    dispatchMode === 'manual' ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  Manual
+                </button>
+              </div>
+            )}
+
+            {/* Reasoning Effort selector */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-neutral-600 font-medium">Effort:</span>
+              <select
+                value={reasoningEffort}
+                onChange={(e) => handleReasoningEffortChange(e.target.value as any)}
+                disabled={isStreaming}
+                className="bg-neutral-900 border border-neutral-800 text-neutral-300 text-xs rounded-lg px-2 py-1 focus:outline-none cursor-pointer disabled:opacity-50"
+              >
+                <option value="Fast">Fast</option>
+                <option value="Balanced">Balanced</option>
+                <option value="Deep">Deep</option>
+                <option value="Adaptive">Adaptive</option>
+              </select>
             </div>
 
             {/* Model capability badges */}
@@ -890,8 +1088,13 @@ export default function Home() {
                   )}
                 </div>
 
-                {/* Render active progress if available */}
-                {activeProgress.length > 0 && (
+                {/* New Council Mode Agent Progress Panel */}
+                {agentCards.length > 0 && (
+                  <AgentProgressPanel agents={agentCards} />
+                )}
+
+                {/* Legacy agent_progress badges (fallback) */}
+                {agentCards.length === 0 && activeProgress.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-1">
                     {activeProgress.map((p, pIdx) => (
                       <span
@@ -915,6 +1118,17 @@ export default function Home() {
                       </span>
                     ))}
                   </div>
+                )}
+
+                {/* Cancel Council button (visible during streaming in council mode) */}
+                {routingMode === 'council' && dispatchMode === 'adaptive' && (
+                  <button
+                    type="button"
+                    onClick={cancelCouncil}
+                    className="mt-2 self-start px-3 py-1 rounded-lg bg-neutral-800 hover:bg-red-900/30 border border-neutral-700 hover:border-red-700/50 text-xs font-semibold text-neutral-400 hover:text-red-400 transition-colors"
+                  >
+                    Cancel Council
+                  </button>
                 )}
               </div>
             </div>
@@ -1111,6 +1325,38 @@ export default function Home() {
                 <div>
                   <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block mb-1">Model ID</span>
                   <span className="text-xs text-neutral-300 font-mono break-all bg-neutral-950 p-2 rounded border border-neutral-850 block">{activeModel.modelId}</span>
+                </div>
+
+                <div className="border-t border-neutral-800 pt-4">
+                  <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest block mb-3">Privacy & Security</span>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1">
+                        <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                        Zero Data Retention
+                      </span>
+                      <p className="text-[10px] text-neutral-500 mt-0.5">Only ZDR-compatible models allowed</p>
+                    </div>
+                    <button
+                      onClick={() => handleZdrToggle(!zdrRequired)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        zdrRequired ? 'bg-cyan-600' : 'bg-neutral-800'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          zdrRequired ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  {zdrRequired && activeModel && !activeModel.supports_zdr && (
+                    <p className="text-[10px] text-red-400 mt-2 bg-red-500/10 p-2 rounded border border-red-500/20">
+                      ZDR mode is ON — <strong>{activeModel.modelId.split('/').pop()}</strong> does not support Zero Data Retention. Select a ZDR-compatible model (marked with ZDR badge) or disable ZDR.
+                    </p>
+                  )}
                 </div>
 
                 <div className="border-t border-neutral-800 pt-4 space-y-4">
@@ -1325,7 +1571,12 @@ export default function Home() {
         </div>
       )}
 
-      {/* 6. Upload Privacy Disclosure Modal */}
+      {/* 6. First-run Onboarding Modal */}
+      {showOnboarding && (
+        <OnboardingModal onComplete={completeOnboarding} />
+      )}
+
+      {/* 7. Upload Privacy Disclosure Modal */}
       {showUploadModal && (
         <div id="upload-disclosure-modal" className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-neutral-900 border border-rose-500/20 rounded-2xl max-w-md w-full p-6 shadow-[0_0_50px_rgba(239,68,68,0.1)] space-y-5 transform scale-100 transition-transform">

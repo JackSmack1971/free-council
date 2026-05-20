@@ -41,11 +41,33 @@ export const TelemetryEngine = {
   },
 
   queryCouncilRetentionRate(windowSeconds: number): number | null {
-    // Stub implementation for Phase 1
-    return null;
+    try {
+      const tsRow = db.prepare("SELECT value FROM app_config WHERE key = 'council_reevaluated_after_ts'").get() as { value: string } | undefined;
+      const reevaluatedAfterTs = tsRow ? parseInt(tsRow.value, 10) : 0;
+
+      const windowStart = Date.now() - windowSeconds * 1000;
+      const minTs = Math.max(windowStart, reevaluatedAfterTs);
+
+      const row = db.prepare(`
+        SELECT
+          SUM(CASE WHEN event_type = 'routed_to_council' THEN 1 ELSE 0 END) as total_routed,
+          SUM(CASE WHEN event_type = 'completed_in_council' THEN 1 ELSE 0 END) as total_completed
+        FROM session_events
+        WHERE ts > ?
+      `).get(minTs) as { total_routed: number | null; total_completed: number | null } | undefined;
+
+      const totalRouted = row?.total_routed || 0;
+      const totalCompleted = row?.total_completed || 0;
+
+      if (totalRouted === 0) return null;
+      return totalCompleted / totalRouted;
+    } catch (err) {
+      console.error('[TelemetryEngine] queryCouncilRetentionRate failed:', err);
+      return null;
+    }
   },
 
   pollRollbackTrigger(): void {
-    // Stub implementation for Phase 1
+    // Delegates to RetentionMonitor - called externally
   }
 };

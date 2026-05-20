@@ -103,6 +103,30 @@ export const apiClient = {
     return res.json();
   },
 
+  async revertSession(sessionId: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/session/${sessionId}/revert`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) {
+      console.warn('Failed to record session revert');
+    }
+  },
+
+  async uploadFile(sessionId: string, file: File): Promise<{ fileId: string; filename: string; mimeType: string; sizeBytes: number; ftsIndexed: boolean }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/upload?sessionId=${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Upload failed: HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
   async updateConfig(payload: { default_mode?: string; council_reevaluated_after_ts?: number; demoted_by_retention?: boolean }): Promise<void> {
     const res = await fetch(`${API_BASE}/config`, {
       method: 'POST',

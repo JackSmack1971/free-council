@@ -3,6 +3,7 @@ import cors from 'cors';
 import { runMigrations } from './db/migrationRunner.js';
 import { ModelPoolManager } from './modules/modelPoolManager.js';
 import { apiRouter } from './routes/api.js';
+import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
 
 const app = express();
@@ -11,8 +12,10 @@ app.use(express.json());
 
 // Mount the API routes
 app.use('/api/v1', apiRouter);
+app.use('/api/v1/upload', uploadRouter);
 // Fallback mounting for non-prefixed paths if needed
 app.use('/', apiRouter);
+app.use('/upload', uploadRouter);
 
 const PORT = process.env.PORT || 3001;
 

@@ -127,10 +127,53 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
   let attempts = 0;
   const maxAttempts = 2;
 
+  // 429 backoff: retry same model up to 2 times before escalating to fallback
+  const with429Backoff = async (
+    modelId: string,
+    body: object,
+    isFast: boolean
+  ): Promise<Response> => {
+    const maxRetries = isFast ? 1 : 2;
+    let retryAttempt = 0;
+    while (true) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      let response: Response;
+      try {
+        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'http://localhost:3000',
+            'X-Title': 'FreeCouncil'
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      if (response.status !== 429 || retryAttempt >= maxRetries) {
+        return response;
+      }
+      retryAttempt++;
+      TelemetryEngine.record({
+        session_id: sessionId,
+        event_type: 'retry',
+        synthesis_rationale: `429_rate_limit attempt ${retryAttempt}`,
+        ts: Date.now()
+      });
+      const retryAfter = response.headers.get('Retry-After');
+      const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.pow(2, retryAttempt) * 1000;
+      console.log(`[soloDispatch] 429 rate limit. Waiting ${waitMs}ms before retry ${retryAttempt}/${maxRetries}`);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  };
+
   const executeCall = async (currentModelId: string): Promise<boolean> => {
     attempts++;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const isFast = (runSettings.reasoningEffort || '').toLowerCase() === 'fast';
 
     try {
       console.log(`[soloDispatch] POST to OpenRouter using model: ${currentModelId} (Attempt ${attempts})`);
@@ -141,17 +184,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
         ...runSettings
       };
 
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'http://localhost:3000',
-          'X-Title': 'FreeCouncil'
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      });
+      const response = await with429Backoff(currentModelId, body, isFast);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -193,8 +226,6 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
         onError(err);
         return false;
       }
-    } finally {
-      clearTimeout(timeoutId);
     }
   };
 
