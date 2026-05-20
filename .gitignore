@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Next.js Build Output
+.next/
+out/
+
+# TypeScript Build Output
+dist/
+build/
+
+# Local databases and logs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# Local environment variables and secrets
+.env.local
+.env.*.local
+
+# IDE / System files
+.DS_Store
+Thumbs.db
