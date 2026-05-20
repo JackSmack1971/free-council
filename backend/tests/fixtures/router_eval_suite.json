@@ -1,0 +1,102 @@
+[
+  {
+    "prompt": "Write a TypeScript function to binary search an array.",
+    "classification": "coding",
+    "expectedRoles": ["Coder"]
+  },
+  {
+    "prompt": "How do I fix a null pointer exception in Java?",
+    "classification": "coding",
+    "expectedRoles": ["Coder"]
+  },
+  {
+    "prompt": "Implement a React component for a dropdown menu.",
+    "classification": "coding",
+    "expectedRoles": ["Coder"]
+  },
+  {
+    "prompt": "Explain how the git rebase command works under the hood.",
+    "classification": "coding",
+    "expectedRoles": ["Coder"]
+  },
+  {
+    "prompt": "Prove that the square root of 2 is irrational.",
+    "classification": "analysis",
+    "expectedRoles": ["Analyst"]
+  },
+  {
+    "prompt": "Compare and contrast the SQL isolation levels Serializable and Repeatable Read.",
+    "classification": "analysis",
+    "expectedRoles": ["Analyst"]
+  },
+  {
+    "prompt": "Solve this puzzle: a man has a wolf, a goat, and a cabbage and needs to cross a river.",
+    "classification": "analysis",
+    "expectedRoles": ["Analyst"]
+  },
+  {
+    "prompt": "Analyze the time complexity of Dijkstra's algorithm using a binary heap.",
+    "classification": "analysis",
+    "expectedRoles": ["Analyst"]
+  },
+  {
+    "prompt": "Write a friendly email inviting my team to a project kickoff meeting next Tuesday.",
+    "classification": "general",
+    "expectedRoles": ["General"]
+  },
+  {
+    "prompt": "Tell me a joke about programming and explain why it is funny.",
+    "classification": "general",
+    "expectedRoles": ["General"]
+  },
+  {
+    "prompt": "Draft a short story about an astronaut who gets lost in a parallel universe.",
+    "classification": "general",
+    "expectedRoles": ["General"]
+  },
+  {
+    "prompt": "What is the capital of France and what is its population?",
+    "classification": "general",
+    "expectedRoles": ["General"]
+  },
+  {
+    "prompt": "Describe the colors and layout of the image of the sunset.",
+    "classification": "vision",
+    "expectedRoles": ["Vision"]
+  },
+  {
+    "prompt": "Can you look at this screenshot of my website and point out any layout bugs?",
+    "classification": "vision",
+    "expectedRoles": ["Vision"]
+  },
+  {
+    "prompt": "Parse the chart in this PNG and summarize the revenue growth.",
+    "classification": "vision",
+    "expectedRoles": ["Vision"]
+  },
+  {
+    "prompt": "Is there any text or symbol in this uploaded image?",
+    "classification": "vision",
+    "expectedRoles": ["Vision"]
+  },
+  {
+    "prompt": "Extract all dates, names, and amounts from this billing invoice text.",
+    "classification": "extraction",
+    "expectedRoles": ["General", "Fast", "Analyst"]
+  },
+  {
+    "prompt": "Generate a JSON list of email addresses found in the following text dump.",
+    "classification": "extraction",
+    "expectedRoles": ["General", "Fast", "Coder"]
+  },
+  {
+    "prompt": "Summarize the key action items from these meeting minutes.",
+    "classification": "extraction",
+    "expectedRoles": ["General", "Fast"]
+  },
+  {
+    "prompt": "Identify all chemical formulas mentioned in this research abstract.",
+    "classification": "extraction",
+    "expectedRoles": ["General", "Fast", "Analyst"]
+  }
+]

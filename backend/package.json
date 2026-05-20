@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "nodemon --watch src --ext ts --exec tsx src/index.ts",
-    "test": "node --import tsx --test --test-concurrency=1 src/**/*.test.ts"
+    "test": "node --import tsx --test --test-concurrency=1 src/**/*.test.ts",
+    "eval-router": "node --import tsx scripts/run-router-eval.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
