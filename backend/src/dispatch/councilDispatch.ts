@@ -97,7 +97,7 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       freeLockEnabled: runSettings.freeLockEnabled !== false,
       activeAgentCount: plan.agents.length,
       requestedApiCalls: plan.totalApiCalls,
-      promptClass: promptClass as 'simple' | 'complex',
+      promptClass: promptClass === 'complex' ? 'non_trivial' : 'simple',
       privacyDisclosureAcknowledged: !!runSettings.privacyDisclosureAcknowledged,
       zdrRequired: !!runSettings.zdrRequired,
       modelSupportsZdr: true,

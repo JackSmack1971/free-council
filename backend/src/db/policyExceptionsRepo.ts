@@ -68,7 +68,7 @@ export function recordException(params: {
  * Returns true if valid, or false and the ID of the tampered record.
  */
 export function verifyExceptionChain(): { isValid: boolean; brokenId?: number } {
-  const records = db.prepare('SELECT * FROM policy_exceptions ORDER BY id ASC').all() as PolicyException[];
+  const records = db.prepare('SELECT * FROM policy_exceptions ORDER BY id ASC').all() as unknown as PolicyException[];
 
   let expectedPrevHash = '';
   for (const record of records) {
