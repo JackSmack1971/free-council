@@ -10,7 +10,7 @@ import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
-import { extractBearerToken, SessionRegistry, SessionState } from '../modules/sessionRegistry.js';
+import { SessionStore } from '../modules/sessionStore.js';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -145,11 +145,7 @@ apiRouter.post('/session', requireApiKey, (req: Request, res: Response) => {
   }
 
   const sessionId = crypto.randomUUID();
-  const apiKey = extractBearerToken(req.headers.authorization);
-  if (!apiKey) {
-    return res.status(401).json({ error: 'API key is missing' });
-  }
-  SessionRegistry.createSession(sessionId, activeModelId, mode, apiKey);
+  SessionStore.createSession(sessionId, activeModelId, mode);
 
   res.status(201).json({
     sessionId,
@@ -202,8 +198,11 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing sessionId or messages' });
   }
 
-  const session = requireOwnedSession(req, res, sessionId);
-  if (!session) return;
+  const session = SessionStore.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  SessionStore.touchSession(sessionId);
 
   const apiKey = extractBearerToken(req.headers.authorization) ?? '';
 
@@ -432,8 +431,11 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  const session = requireOwnedSession(req, res, sessionId);
-  if (!session) return;
+  const session = SessionStore.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
   try {
     TelemetryEngine.record({
       session_id: sessionId,
@@ -441,7 +443,7 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
       api_calls: 0,
       ts: Date.now()
     });
-    SessionRegistry.updateMode(sessionId, 'solo');
+    SessionStore.updateSessionMode(sessionId, 'solo');
     return res.json({ success: true, sessionId });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to record revert event' });
@@ -452,7 +454,9 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
 apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
   const { eventType, apiCalls, synthesisRationale } = req.body;
   const sessionId = req.params.id;
-  if (!requireOwnedSession(req, res, sessionId)) return;
+  if (!SessionStore.getSession(sessionId)) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
 
   try {
     TelemetryEngine.record({
@@ -462,6 +466,7 @@ apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
       synthesis_rationale: synthesisRationale,
       ts: Date.now()
     });
+    SessionStore.touchSession(sessionId);
     res.status(201).json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to record event' });
