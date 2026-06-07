@@ -10,6 +10,7 @@ import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -59,6 +60,16 @@ function validateJsonSchema(data: any, schema: any): Array<{ path: string; messa
 }
 
 export const apiRouter = Router();
+const createSessionRateLimiter = createRateLimitMiddleware({
+  scope: 'api-session',
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 20
+});
+const dispatchRateLimiter = createRateLimitMiddleware({
+  scope: 'api-dispatch',
+  windowMs: 60 * 1000,
+  maxRequests: 10
+});
 
 const DEFAULT_MODELS = [
   'inclusionai/ring-2.6-1t:free',
@@ -101,7 +112,7 @@ const requireApiKey = (req: Request, res: Response, next: () => void) => {
 };
 
 // POST /session
-apiRouter.post('/session', (req: Request, res: Response) => {
+apiRouter.post('/session', createSessionRateLimiter, (req: Request, res: Response) => {
   const { modelId, mode } = req.body;
   if (!mode || (mode !== 'solo' && mode !== 'council')) {
     return res.status(400).json({ error: 'Invalid mode. Supported modes: solo, council.' });
@@ -179,7 +190,7 @@ apiRouter.get('/models', requireApiKey, (req: Request, res: Response) => {
 });
 
 // POST /dispatch
-apiRouter.post('/dispatch', async (req: Request, res: Response) => {
+apiRouter.post('/dispatch', dispatchRateLimiter, async (req: Request, res: Response) => {
   const { sessionId, messages, settings = {} } = req.body;
 
   if (!sessionId || !Array.isArray(messages)) {
