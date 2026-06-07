@@ -60,6 +60,16 @@ function validateJsonSchema(data: any, schema: any): Array<{ path: string; messa
 }
 
 export const apiRouter = Router();
+const createSessionRateLimiter = createRateLimitMiddleware({
+  scope: 'api-session',
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 20
+});
+const dispatchRateLimiter = createRateLimitMiddleware({
+  scope: 'api-dispatch',
+  windowMs: 60 * 1000,
+  maxRequests: 10
+});
 
 const DEFAULT_MODELS = [
   'inclusionai/ring-2.6-1t:free',
@@ -195,7 +205,7 @@ apiRouter.get('/models', requireApiKey, (req: Request, res: Response) => {
 });
 
 // POST /dispatch
-apiRouter.post('/dispatch', async (req: Request, res: Response) => {
+apiRouter.post('/dispatch', dispatchRateLimiter, async (req: Request, res: Response) => {
   const { sessionId, messages, settings = {} } = req.body;
 
   if (!sessionId || !Array.isArray(messages)) {

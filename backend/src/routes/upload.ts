@@ -7,6 +7,11 @@ import { recordException } from '../db/policyExceptionsRepo.js';
 import { extractBearerToken, SessionRegistry } from '../modules/sessionRegistry.js';
 
 export const uploadRouter = Router();
+const uploadRateLimiter = createRateLimitMiddleware({
+  scope: 'upload',
+  windowMs: 60 * 1000,
+  maxRequests: 5
+});
 
 const ALLOWED_MIME_TYPES = new Set([
   'text/plain',
@@ -69,7 +74,7 @@ function parseMultipart(body: Buffer, boundary: string): Map<string, { headers: 
 }
 
 // POST /upload — multipart/form-data
-uploadRouter.post('/', async (req: Request, res: Response) => {
+uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) => {
   // Check upload disclosure acknowledgment
   const sessionId = req.query.sessionId as string || '';
   if (!sessionId) {
