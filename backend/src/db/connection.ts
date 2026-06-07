@@ -1,12 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { resolveDbPath } from './resolveDbPath.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Store database at the root of the project
-const dbPath = path.resolve(__dirname, '../../../free_council.db');
+const dbPath = resolveDbPath();
 
 export const db = new DatabaseSync(dbPath);
 
