@@ -39,6 +39,13 @@ export interface QuotaInfo {
   updatedAt: number;
 }
 
+export interface ModelPerformanceInfo {
+  modelId: string;
+  avgScore: number;
+  sessionCount: number;
+  lastSeen: number;
+}
+
 export const apiClient = {
   async createSession(modelId: string, mode: 'solo' | 'council'): Promise<string> {
     const res = await fetch(`${API_BASE}/session`, {
@@ -70,6 +77,15 @@ export const apiClient = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `Failed to fetch quota: HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  async getModelPerformance(): Promise<ModelPerformanceInfo[]> {
+    const res = await fetch(`${API_BASE}/model-performance`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to fetch model performance: HTTP ${res.status}`);
     }
     return res.json();
   },
