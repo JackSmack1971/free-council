@@ -3,6 +3,7 @@ import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { renderAggregatorPrompt } from './moa/index.js';
 import { executeSoloFallback } from '../dispatch/soloFallback.js';
+import { getRequestTimeoutMs } from '../config/requestTimeout.js';
 
 // In-memory proposer response cache, keyed by (modelId + "|" + promptHash), scoped per session
 const proposerCache = new Map<string, Map<string, string>>();
@@ -39,7 +40,7 @@ async function fetchWithRateLimitBackoff(
   let retryCount = 0;
   while (true) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
     let response: Response;
     try {
       response = await fetch(url, { ...options, signal: controller.signal });

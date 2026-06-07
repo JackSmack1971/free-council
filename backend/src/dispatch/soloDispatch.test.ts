@@ -7,14 +7,17 @@ import { db } from '../db/connection.js';
 
 describe('soloDispatch Tests', () => {
   let originalFetch: typeof fetch;
+  let originalSetTimeout: typeof globalThis.setTimeout;
 
   before(() => {
     runMigrations();
     originalFetch = globalThis.fetch;
+    originalSetTimeout = globalThis.setTimeout;
   });
 
   after(() => {
     globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
   });
 
   test('limitContext should keep system message and prune oldest messages', () => {
@@ -194,6 +197,53 @@ describe('soloDispatch Tests', () => {
       });
     } finally {
       delete process.env.FRONTEND_URL;
+    }
+  });
+
+  test('dispatchSoloChat should use REQUEST_TIMEOUT_MS when configured', async () => {
+    const sessionId = 'test-session-timeout-' + Date.now();
+    process.env.REQUEST_TIMEOUT_MS = '60000';
+    let observedTimeout = -1;
+
+    try {
+      globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+        observedTimeout = Number(timeout);
+        return originalSetTimeout(handler, 0, ...args);
+      }) as typeof globalThis.setTimeout;
+
+      globalThis.fetch = async () => {
+        return {
+          ok: true,
+          body: {
+            getReader() {
+              return {
+                async read() {
+                  return { value: undefined, done: true };
+                }
+              };
+            }
+          }
+        } as any;
+      };
+
+      await dispatchSoloChat({
+        sessionId,
+        modelId: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hello' }],
+        runSettings: {},
+        apiKey: 'test-key',
+        freeLockEnabled: true,
+        onChunk: () => {},
+        onError: (err) => {
+          assert.fail('Should not error: ' + err.message);
+        },
+        onComplete: () => {}
+      });
+
+      assert.strictEqual(observedTimeout, 60000);
+    } finally {
+      delete process.env.REQUEST_TIMEOUT_MS;
+      globalThis.setTimeout = originalSetTimeout;
     }
   });
 });
