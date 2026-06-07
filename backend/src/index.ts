@@ -9,6 +9,8 @@ import { RetentionMonitor } from './modules/retentionMonitor.js';
 import { SessionCleanupMonitor } from './modules/sessionCleanupMonitor.js';
 import { resolvePort } from './config/port.js';
 import { configureConsoleLogging } from './config/logger.js';
+import { closeDatabase, checkpointDatabase } from './db/connection.js';
+import { installGracefulShutdown } from './server/gracefulShutdown.js';
 
 configureConsoleLogging();
 
@@ -44,11 +46,18 @@ async function startServer() {
     console.error('[Startup] Failed to load/refresh model catalog on startup:', err);
   }
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`[Startup] Server successfully started on port ${PORT}`);
     // Start retention monitoring (every 60 seconds)
     RetentionMonitor.start();
     SessionCleanupMonitor.start();
+  });
+
+  installGracefulShutdown({
+    server,
+    retentionMonitor: RetentionMonitor,
+    checkpointDatabase,
+    closeDatabase
   });
 }
 
