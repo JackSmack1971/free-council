@@ -98,6 +98,16 @@ function writeSseErrorFrame(res: Response, message: string, partial: boolean): v
   res.write(`data: ${JSON.stringify({ type: 'error', message, partial })}\n\n`);
 }
 
+export function reportDispatchError(
+  res: Response,
+  context: 'council' | 'solo',
+  err: unknown,
+  partial: boolean
+): void {
+  console.error(`[dispatch:${context}] Request failed:`, err);
+  writeSseErrorFrame(res, GENERIC_REQUEST_ERROR, partial);
+}
+
 // Middleware to check API key present
 const requireApiKey = (req: Request, res: Response, next: () => void) => {
   if (!extractBearerToken(req.headers.authorization)) {
@@ -544,8 +554,9 @@ apiRouter.get('/config', (req: Request, res: Response) => {
       configObj[row.key] = row.value;
     }
     res.json(configObj);
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to retrieve configuration: ' + err.message });
+  } catch (err) {
+    console.error('[config] Failed to retrieve configuration:', err);
+    res.status(500).json({ error: GENERIC_CONFIG_READ_ERROR });
   }
 });
 
@@ -601,8 +612,9 @@ apiRouter.post('/config', (req: Request, res: Response) => {
       db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('demoted_by_retention', ?)").run(String(demoted_by_retention));
     }
     res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to update configuration: ' + err.message });
+  } catch (err) {
+    console.error('[config] Failed to update configuration:', err);
+    res.status(500).json({ error: GENERIC_CONFIG_UPDATE_ERROR });
   }
 });
 

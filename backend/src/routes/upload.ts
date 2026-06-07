@@ -191,6 +191,6 @@ uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) =>
       db.prepare('DELETE FROM uploaded_files WHERE id = ?').run(fileId);
     }
     console.error('[upload] Processing failed:', err);
-    return res.status(500).json({ error: 'File processing failed: ' + err.message });
+    return res.status(500).json({ error: 'File processing failed.' });
   }
 });
