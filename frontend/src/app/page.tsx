@@ -183,15 +183,9 @@ export default function Home() {
       setShowOnboarding(true);
     }
 
-    // Load API Key
-    const savedKey = await localDB.get<string>('api_key');
-    if (savedKey) {
-      setApiKey(savedKey);
-      setTempKey(savedKey);
-      validateAndLoad(savedKey);
-    } else {
-      setShowKeyModal(true);
-    }
+    // API keys are session-only and should never persist in browser storage.
+    await localDB.delete('api_key');
+    setShowKeyModal(true);
 
     // Load Free Lock State
     const savedLock = await localDB.get<boolean>('free_lock_enabled');
@@ -293,7 +287,6 @@ export default function Home() {
 
   const saveApiKey = async () => {
     if (!tempKey.trim()) return;
-    await localDB.set('api_key', tempKey.trim());
     setApiKey(tempKey.trim());
     validateAndLoad(tempKey.trim());
   };

@@ -54,6 +54,24 @@ class LocalDB {
       }
     }
   }
+
+  async delete(key: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        const req = store.delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (e) {
+      if (typeof window !== 'undefined') {
+        console.warn('IndexedDB delete failed, falling back to localStorage:', e);
+        localStorage.removeItem(key);
+      }
+    }
+  }
 }
 
 export const localDB = new LocalDB();
