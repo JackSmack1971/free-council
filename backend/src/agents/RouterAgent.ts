@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { NormalizedModelCapabilities, AgentPlan } from 'shared';
 import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
+import { getRequestTimeoutMs } from '../config/requestTimeout.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,15 +89,20 @@ export class RouterAgent {
       'inclusionai/ring-2.6-1t:free',
       'openrouter/free'
     ];
+    const requestTimeoutMs = getRequestTimeoutMs();
 
     let responseText = '';
     let usedModel = '';
 
     for (const model of modelsToTry) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+
       try {
         console.log(`[RouterAgent] Calling Meta-LLM ${model}...`);
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
@@ -120,7 +126,13 @@ export class RouterAgent {
         usedModel = model;
         break; // Success!
       } catch (err: any) {
-        console.warn(`[RouterAgent] Call to ${model} failed:`, err.message || err);
+        const errorMessage =
+          err?.name === 'AbortError'
+            ? `Request timed out after ${requestTimeoutMs}ms`
+            : (err.message || err);
+        console.warn(`[RouterAgent] Call to ${model} failed:`, errorMessage);
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
 

@@ -111,8 +111,8 @@ describe('RouterAgent GoA sampling tests', () => {
 
     const plan = await RouterAgent.sampleAgents('write a fast web server in typescript', dummyModels, 3, 'dummy-key');
 
-    assert.strictEqual(plan.executionMode, 'goa_lite');
-    assert.strictEqual(plan.totalApiCalls, 3);
+    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
+    assert.strictEqual(plan.totalApiCalls, 4);
     assert.strictEqual(plan.agents.length, 2);
     assert.strictEqual(plan.agents[0].role, 'Coder');
     assert.strictEqual(plan.agents[0].modelId, 'qwen/qwen-2.5-72b-instruct:free');
@@ -171,11 +171,46 @@ describe('RouterAgent GoA sampling tests', () => {
     const plan = await RouterAgent.sampleAgents('some query', dummyModels, 3, 'dummy-key');
 
     assert.ok(plan.agents.length > 0);
-    assert.strictEqual(plan.executionMode, 'goa_lite');
+    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
     for (const agent of plan.agents) {
       const match = dummyModels.find(m => m.modelId === agent.modelId);
       assert.ok(match);
       assert.strictEqual(match.is_free, true);
+    }
+  });
+
+  test('should abort hung router requests after the configured timeout', async () => {
+    const originalTimeout = process.env.REQUEST_TIMEOUT_MS;
+    process.env.REQUEST_TIMEOUT_MS = '5';
+
+    globalThis.fetch = async (_url: any, init: any) => {
+      const { signal } = init;
+
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          const abortError = new Error('aborted');
+          abortError.name = 'AbortError';
+          reject(abortError);
+        });
+      });
+    };
+
+    const startedAt = Date.now();
+
+    try {
+      const plan = await RouterAgent.sampleAgents('hung upstream request', dummyModels, 3, 'dummy-key');
+      const elapsedMs = Date.now() - startedAt;
+
+      assert.ok(elapsedMs < 250, `Expected timeout fallback within 250ms, got ${elapsedMs}ms`);
+      assert.ok(plan.agents.length > 0);
+      assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
+      assert.strictEqual(plan.samplingRationale, 'Fallback defaults due to empty or invalid router response.');
+    } finally {
+      if (originalTimeout === undefined) {
+        delete process.env.REQUEST_TIMEOUT_MS;
+      } else {
+        process.env.REQUEST_TIMEOUT_MS = originalTimeout;
+      }
     }
   });
 });
