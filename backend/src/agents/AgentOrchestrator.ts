@@ -2,6 +2,7 @@ import { AgentPlan, AgentResult, AgentAssignment } from 'shared';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { renderAggregatorPrompt } from './moa/index.js';
+import { executeSoloFallback } from '../dispatch/soloFallback.js';
 
 // In-memory proposer response cache, keyed by (modelId + "|" + promptHash), scoped per session
 const proposerCache = new Map<string, Map<string, string>>();
@@ -137,66 +138,6 @@ async function callAgentWithTimeoutAndRetry(
   throw new Error('Max attempts reached');
 }
 
-async function runSoloFallback(prompt: string, apiKey: string, sessionId: string): Promise<AgentResult> {
-  TelemetryEngine.record({
-    session_id: sessionId,
-    event_type: 'solo_fallback',
-    api_calls: 1,
-    ts: Date.now()
-  });
-
-  const defaultModel = 'meta-llama/llama-3.3-70b-instruct:free';
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'FreeCouncil'
-      },
-      body: JSON.stringify({
-        model: defaultModel,
-        messages: [{ role: 'user', content: prompt }]
-      }),
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      throw new Error(`Solo fallback HTTP ${response.status}`);
-    }
-
-    const json = await response.json() as any;
-    const text = json.choices?.[0]?.message?.content || '';
-
-    return {
-      role: 'SoloFallback',
-      modelId: defaultModel,
-      response: text,
-      isPrimary: true,
-      status: 'completed',
-      usedFallback: true,
-      fallbackReason: 'Double timeout on all council agents'
-    };
-  } catch (err: any) {
-    return {
-      role: 'SoloFallback',
-      modelId: defaultModel,
-      response: 'Error during Solo fallback: ' + err.message,
-      isPrimary: true,
-      status: 'failed',
-      error: err.message,
-      usedFallback: true,
-      fallbackReason: 'Double timeout on all council agents'
-    };
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 async function callAgentWithCache(
   agent: AgentAssignment,
   prompt: string,
@@ -269,7 +210,7 @@ export const AgentOrchestrator = {
     }
 
     if (hasDoubleTimeout) {
-      const fallback = await runSoloFallback(prompt, apiKey, sessionId);
+      const fallback = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
       yield fallback;
       return;
     }
@@ -557,7 +498,7 @@ export const AgentOrchestrator = {
     // Handle double timeout fallback to solo mode
     if (hasDoubleTimeout) {
       console.warn('[AgentOrchestrator] Double timeout detected on initial agent calls. Falling back to Solo Mode.');
-      const fallbackResult = await runSoloFallback(prompt, apiKey, sessionId);
+      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
       yield fallbackResult;
       return;
     }
@@ -675,7 +616,7 @@ Do not include any thinking, explanation, markdown formatting, or other text. Re
 
     if (hasDoubleTimeout) {
       console.warn('[AgentOrchestrator] Double timeout detected during scoring calls. Falling back to Solo Mode.');
-      const fallbackResult = await runSoloFallback(prompt, apiKey, sessionId);
+      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
       yield fallbackResult;
       return;
     }

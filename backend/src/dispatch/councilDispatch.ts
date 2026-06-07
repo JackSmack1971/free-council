@@ -3,7 +3,7 @@ import { RouterAgent } from '../agents/RouterAgent.js';
 import { AgentOrchestrator } from '../agents/AgentOrchestrator.js';
 import { PreflightGate } from '../modules/preflightGate.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
-import { dispatchSoloChat } from './soloDispatch.js';
+import { DEFAULT_SOLO_FALLBACK_MODEL_ID, dispatchViaSoloFallback } from './soloFallback.js';
 import { db } from '../db/connection.js';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
@@ -48,15 +48,9 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
 
     // 4. Manual mode: bypass RouterAgent, use solo dispatch
     if (routingMode === 'manual') {
-      TelemetryEngine.record({
-        session_id: sessionId,
-        event_type: 'routed_to_solo',
-        api_calls: 1,
-        ts: Date.now()
-      });
-      await dispatchSoloChat({
+      await dispatchViaSoloFallback('manual_routing', {
         ...options,
-        modelId: runSettings.manualModelId || 'meta-llama/llama-3.3-70b-instruct:free',
+        modelId: runSettings.manualModelId || DEFAULT_SOLO_FALLBACK_MODEL_ID,
         freeLockEnabled: runSettings.freeLockEnabled !== false
       });
       return;
@@ -87,15 +81,9 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     // 6. Route based on reasoning effort and prompt complexity
     if ((effort === 'Balanced' || effort === 'Deep') && promptClass === 'simple') {
       console.log(`[councilDispatch] Simple prompt in ${effort} mode. Falling back to Solo Mode.`);
-      TelemetryEngine.record({
-        session_id: sessionId,
-        event_type: 'routed_to_solo',
-        api_calls: 1,
-        ts: Date.now()
-      });
-      await dispatchSoloChat({
+      await dispatchViaSoloFallback(`simple_prompt_${String(effort).toLowerCase()}`, {
         ...options,
-        modelId: 'meta-llama/llama-3.3-70b-instruct:free',
+        modelId: DEFAULT_SOLO_FALLBACK_MODEL_ID,
         freeLockEnabled: runSettings.freeLockEnabled !== false
       });
       return;
