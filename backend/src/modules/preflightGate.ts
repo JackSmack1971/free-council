@@ -18,122 +18,143 @@ function logException(violation: PolicyViolation, modelId: string | null, userAc
   }
 }
 
-export const PreflightGate = {
-  check(context: PreflightContext): GateResult {
-    // 1. API_KEY_MISSING check
-    if (!context.apiKeyPresent) {
+function resolveFreeLockFallbackModelId(): string {
+  const freeModels = ModelPoolManager.getFreeModels();
+  let fallbackModelId = 'openrouter/free';
+
+  if (freeModels.length > 0) {
+    const preferred = [
+      'meta-llama/llama-3.3-70b-instruct:free',
+      'google/gemini-2.5-flash',
+      'openrouter/free'
+    ];
+    const found = preferred.find(id => freeModels.some(m => m.modelId === id));
+    fallbackModelId = found || freeModels[0].modelId;
+  }
+
+  return fallbackModelId;
+}
+
+function resolveAggregatorFallbackModelId(proposerModelIds: string[] = []): string {
+  const freeModels = ModelPoolManager.getFreeModels();
+  const candidateModels = freeModels.filter(m => !proposerModelIds.includes(m.modelId));
+  const reasoningCandidate = candidateModels.find(m => m.reasoning);
+  return reasoningCandidate?.modelId || candidateModels[0]?.modelId || 'meta-llama/llama-3.3-70b-instruct:free';
+}
+
+type PolicyEvaluationDependencies = {
+  freeLockFallbackModelId?: string;
+  aggregatorFallbackModelId?: string;
+};
+
+export function evaluatePreflightPolicy(
+  context: PreflightContext,
+  dependencies: PolicyEvaluationDependencies = {}
+): GateResult {
+  const freeLockFallbackModelId = dependencies.freeLockFallbackModelId || 'openrouter/free';
+  const aggregatorFallbackModelId = dependencies.aggregatorFallbackModelId || 'meta-llama/llama-3.3-70b-instruct:free';
+
+  if (!context.apiKeyPresent) {
+    return { allowed: false, violation: 'API_KEY_MISSING' };
+  }
+
+  if (context.freeLockEnabled && !context.isFreeModel) {
+    return {
+      allowed: false,
+      violation: 'FREE_LOCK_VIOLATION',
+      reassignedModelId: freeLockFallbackModelId
+    };
+  }
+
+  if (context.isProviderLogged && !context.privacyDisclosureAcknowledged) {
+    return { allowed: false, violation: 'PRIVACY_DISCLOSURE_PENDING' };
+  }
+
+  if (context.zdrRequired && !context.modelSupportsZdr) {
+    return { allowed: false, violation: 'ZDR_REQUIRED_UNAVAILABLE' };
+  }
+
+  if (context.containsUpload && !context.uploadDisclosureAcknowledged) {
+    return { allowed: false, violation: 'UPLOAD_DISCLOSURE_PENDING' };
+  }
+
+  const isSimplePromptMultiAgent = context.promptClass === 'simple' && context.requestedApiCalls > 1;
+  const isOverCallLimit = context.requestedApiCalls > 5;
+  if ((isSimplePromptMultiAgent || isOverCallLimit) && !context.budgetEscalated) {
+    return { allowed: false, violation: 'BUDGET_VIOLATION' };
+  }
+
+  if (context.aggregatorModelId && context.proposerModelIds && context.proposerModelIds.includes(context.aggregatorModelId)) {
+    return {
+      allowed: false,
+      violation: 'AGGREGATOR_ROLE_CONFLICT',
+      reassignedModelId: aggregatorFallbackModelId
+    };
+  }
+
+  if (context.structuredOutputRequested && !context.modelSupportsStructuredOutput) {
+    return { allowed: false, violation: 'STRUCTURED_OUTPUT_UNAVAILABLE' };
+  }
+
+  if (context.activeAgentCount > 5) {
+    return { allowed: true, violation: 'AGENT_CAP_VIOLATION' };
+  }
+
+  return { allowed: true };
+}
+
+function recordPolicyOutcome(context: PreflightContext, result: GateResult): void {
+  if (!result.violation) {
+    return;
+  }
+
+  switch (result.violation) {
+    case 'API_KEY_MISSING':
       TelemetryEngine.record({
         session_id: context.sessionId,
         event_type: 'api_key_missing',
         ts: Date.now()
       });
       logException('API_KEY_MISSING', context.modelId, 'dismissed', context.sessionId);
-      return { allowed: false, violation: 'API_KEY_MISSING' };
-    }
-
-    // 2. FREE_LOCK_VIOLATION check
-    if (context.freeLockEnabled && !context.isFreeModel) {
+      return;
+    case 'FREE_LOCK_VIOLATION':
       TelemetryEngine.record({
         session_id: context.sessionId,
         event_type: 'free_lock_rejection',
         ts: Date.now()
       });
-
-      // Find fallback free model
-      const freeModels = ModelPoolManager.getFreeModels();
-      let fallbackModelId = 'openrouter/free'; // Default fallback
-
-      if (freeModels.length > 0) {
-        // Prefer a popular general free model if it's available
-        const preferred = [
-          'meta-llama/llama-3.3-70b-instruct:free',
-          'google/gemini-2.5-flash',
-          'openrouter/free'
-        ];
-        const found = preferred.find(id => freeModels.some(m => m.modelId === id));
-        if (found) {
-          fallbackModelId = found;
-        } else {
-          fallbackModelId = freeModels[0].modelId;
-        }
-      }
-
       logException('FREE_LOCK_VIOLATION', context.modelId, 'lock_disabled', context.sessionId, {
-        reassignedModelId: fallbackModelId
+        reassignedModelId: result.reassignedModelId
       });
-
-      return {
-        allowed: false,
-        violation: 'FREE_LOCK_VIOLATION',
-        reassignedModelId: fallbackModelId
-      };
-    }
-
-    // 3. PRIVACY_DISCLOSURE_PENDING check
-    if (context.isProviderLogged && !context.privacyDisclosureAcknowledged) {
+      return;
+    case 'PRIVACY_DISCLOSURE_PENDING':
       TelemetryEngine.record({
         session_id: context.sessionId,
         event_type: 'privacy_disclosure_pending',
         ts: Date.now()
       });
       logException('PRIVACY_DISCLOSURE_PENDING', context.modelId, 'acknowledged', context.sessionId);
-      return { allowed: false, violation: 'PRIVACY_DISCLOSURE_PENDING' };
-    }
-
-    // 4. ZDR_REQUIRED_UNAVAILABLE check
-    if (context.zdrRequired && !context.modelSupportsZdr) {
+      return;
+    case 'ZDR_REQUIRED_UNAVAILABLE':
       logException('ZDR_REQUIRED_UNAVAILABLE', context.modelId, 'zdr_disabled', context.sessionId);
-      return { allowed: false, violation: 'ZDR_REQUIRED_UNAVAILABLE' };
-    }
-
-    // 5. UPLOAD_DISCLOSURE_PENDING check
-    if (context.containsUpload && !context.uploadDisclosureAcknowledged) {
+      return;
+    case 'UPLOAD_DISCLOSURE_PENDING':
       logException('UPLOAD_DISCLOSURE_PENDING', context.modelId, 'acknowledged', context.sessionId);
-      return { allowed: false, violation: 'UPLOAD_DISCLOSURE_PENDING' };
-    }
-
-    // 6. BUDGET_VIOLATION check
-    const isSimplePromptMultiAgent = context.promptClass === 'simple' && context.requestedApiCalls > 1;
-    const isOverCallLimit = context.requestedApiCalls > 5;
-    if ((isSimplePromptMultiAgent || isOverCallLimit) && !context.budgetEscalated) {
+      return;
+    case 'BUDGET_VIOLATION':
       logException('BUDGET_VIOLATION', context.modelId, 'escalated', context.sessionId, {
         promptClass: context.promptClass,
         requestedApiCalls: context.requestedApiCalls
       });
-      return { allowed: false, violation: 'BUDGET_VIOLATION' };
-    }
-
-    // 7. AGGREGATOR_ROLE_CONFLICT check
-    if (context.aggregatorModelId && context.proposerModelIds && context.proposerModelIds.includes(context.aggregatorModelId)) {
-      const freeModels = ModelPoolManager.getFreeModels();
-      const proposers = context.proposerModelIds;
-      const candidateModels = freeModels.filter(m => !proposers.includes(m.modelId));
-      let fallbackAggregatorModelId = 'meta-llama/llama-3.3-70b-instruct:free'; // Default fallback
-
-      if (candidateModels.length > 0) {
-        const reasoningCandidate = candidateModels.find(m => m.reasoning);
-        if (reasoningCandidate) {
-          fallbackAggregatorModelId = reasoningCandidate.modelId;
-        } else {
-          fallbackAggregatorModelId = candidateModels[0].modelId;
-        }
-      }
-
+      return;
+    case 'AGGREGATOR_ROLE_CONFLICT':
       logException('AGGREGATOR_ROLE_CONFLICT', context.modelId, 'acknowledged', context.sessionId, {
         aggregatorModelId: context.aggregatorModelId,
         proposerModelIds: context.proposerModelIds,
-        reassignedModelId: fallbackAggregatorModelId
+        reassignedModelId: result.reassignedModelId
       });
-
-      return {
-        allowed: false,
-        violation: 'AGGREGATOR_ROLE_CONFLICT',
-        reassignedModelId: fallbackAggregatorModelId
-      };
-    }
-
-    // 8. STRUCTURED_OUTPUT_UNAVAILABLE check
-    if (context.structuredOutputRequested && !context.modelSupportsStructuredOutput) {
+      return;
+    case 'STRUCTURED_OUTPUT_UNAVAILABLE':
       TelemetryEngine.record({
         session_id: context.sessionId,
         event_type: 'policy_violation',
@@ -143,19 +164,25 @@ export const PreflightGate = {
         structuredOutputRequested: true,
         modelSupportsStructuredOutput: false
       });
-      return { allowed: false, violation: 'STRUCTURED_OUTPUT_UNAVAILABLE' };
-    }
-
-    // 9. AGENT_CAP_VIOLATION check
-    if (context.activeAgentCount > 5) {
+      return;
+    case 'AGENT_CAP_VIOLATION':
       logException('AGENT_CAP_VIOLATION', context.modelId, 'acknowledged', context.sessionId, {
         originalAgentCount: context.activeAgentCount,
         truncatedCount: 5
       });
-      return { allowed: true, violation: 'AGENT_CAP_VIOLATION' };
-    }
+      return;
+    default:
+      return;
+  }
+}
 
-    // Allowed!
-    return { allowed: true };
+export const PreflightGate = {
+  check(context: PreflightContext): GateResult {
+    const result = evaluatePreflightPolicy(context, {
+      freeLockFallbackModelId: resolveFreeLockFallbackModelId(),
+      aggregatorFallbackModelId: resolveAggregatorFallbackModelId(context.proposerModelIds)
+    });
+    recordPolicyOutcome(context, result);
+    return result;
   }
 };

@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { PreflightGate } from './preflightGate.js';
+import { evaluatePreflightPolicy, PreflightGate } from './preflightGate.js';
 import { runMigrations } from '../db/migrationRunner.js';
 import { db } from '../db/connection.js';
 
@@ -300,5 +300,33 @@ describe('PreflightGate Tests', () => {
 
     const res = PreflightGate.check(context);
     assert.strictEqual(res.allowed, true);
+  });
+
+  test('evaluatePreflightPolicy should run as a pure decision function with injected fallbacks', () => {
+    const res = evaluatePreflightPolicy(
+      {
+        modelId: 'openai/gpt-4o',
+        isProviderLogged: false,
+        isFreeModel: false,
+        apiKeyPresent: true,
+        freeLockEnabled: true,
+        activeAgentCount: 1,
+        requestedApiCalls: 1,
+        promptClass: 'simple' as const,
+        privacyDisclosureAcknowledged: true,
+        zdrRequired: false,
+        modelSupportsZdr: true,
+        containsUpload: false,
+        uploadDisclosureAcknowledged: true,
+        sessionId: 'pure-policy-test'
+      },
+      { freeLockFallbackModelId: 'openrouter/free' }
+    );
+
+    assert.deepStrictEqual(res, {
+      allowed: false,
+      violation: 'FREE_LOCK_VIOLATION',
+      reassignedModelId: 'openrouter/free'
+    });
   });
 });
