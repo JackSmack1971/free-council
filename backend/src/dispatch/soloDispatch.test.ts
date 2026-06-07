@@ -154,4 +154,46 @@ describe('soloDispatch Tests', () => {
     assert.strictEqual(attemptCount, 2);
     assert.ok(completed);
   });
+
+  test('dispatchSoloChat should use FRONTEND_URL for OpenRouter referer', async () => {
+    const sessionId = 'test-session-referer-' + Date.now();
+    process.env.FRONTEND_URL = 'https://example.com';
+
+    try {
+      globalThis.fetch = async (url, options) => {
+        assert.strictEqual(
+          (options?.headers as Record<string, string>)['HTTP-Referer'],
+          'https://example.com'
+        );
+        return {
+          ok: true,
+          body: {
+            getReader() {
+              return {
+                async read() {
+                  return { value: undefined, done: true };
+                }
+              };
+            }
+          }
+        } as any;
+      };
+
+      await dispatchSoloChat({
+        sessionId,
+        modelId: 'openrouter/free',
+        messages: [{ role: 'user', content: 'Hello' }],
+        runSettings: {},
+        apiKey: 'test-key',
+        freeLockEnabled: true,
+        onChunk: () => {},
+        onError: (err) => {
+          assert.fail('Should not error: ' + err.message);
+        },
+        onComplete: () => {}
+      });
+    } finally {
+      delete process.env.FRONTEND_URL;
+    }
+  });
 });

@@ -87,7 +87,7 @@ async function callAgentWithTimeoutAndRetry(
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'http://localhost:3000',
+            'HTTP-Referer': getOpenRouterHttpReferer(),
             'X-Title': 'FreeCouncil'
           },
           body: JSON.stringify({

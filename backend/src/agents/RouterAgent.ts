@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { NormalizedModelCapabilities, AgentPlan } from 'shared';
+import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -99,7 +100,7 @@ export class RouterAgent {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'http://localhost:3000',
+            'HTTP-Referer': getOpenRouterHttpReferer(),
             'X-Title': 'FreeCouncil'
           },
           body: JSON.stringify({

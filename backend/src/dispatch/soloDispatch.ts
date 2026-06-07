@@ -2,6 +2,7 @@ import { PreflightContext, GateResult } from 'shared';
 import { PreflightGate } from '../modules/preflightGate.js';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
+import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 const FALLBACK_MODELS: Record<string, string> = {
   'inclusionai/ring-2.6-1t:free': 'openrouter/free',
@@ -145,7 +146,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'http://localhost:3000',
+            'HTTP-Referer': getOpenRouterHttpReferer(),
             'X-Title': 'FreeCouncil'
           },
           body: JSON.stringify(body),
@@ -236,7 +237,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'http://localhost:3000',
+          'HTTP-Referer': getOpenRouterHttpReferer(),
           'X-Title': 'FreeCouncil'
         },
         body: JSON.stringify(body),
