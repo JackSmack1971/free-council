@@ -78,6 +78,7 @@ const DEFAULT_MODELS = [
 
 function finalizeDispatchSession(sessionId: string): void {
   clearSessionCache(sessionId);
+  TelemetryEngine.clearSessionState(sessionId);
 }
 
 function writeSseErrorFrame(res: Response, message: string, partial: boolean): void {
