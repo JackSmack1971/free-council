@@ -7,6 +7,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export class RouterAgent {
+  static readonly SAMPLE_AGENTS_TIMEOUT_MS = 30000;
+
   static determineExecutionMode(
     reasoningEffort: string,
     promptClass: 'simple' | 'non_trivial',
@@ -48,7 +50,8 @@ export class RouterAgent {
     reasoningEffort: string = 'Balanced',
     promptClass: 'simple' | 'non_trivial' = 'non_trivial',
     freeLockEnabled: boolean = true,
-    budgetEscalated: boolean = false
+    budgetEscalated: boolean = false,
+    timeoutMs: number = RouterAgent.SAMPLE_AGENTS_TIMEOUT_MS
   ): Promise<AgentPlan> {
     // 1. Filter models to ensure we only present free models
     const freeModels = models.filter(m => m.is_free);
@@ -94,20 +97,29 @@ export class RouterAgent {
     for (const model of modelsToTry) {
       try {
         console.log(`[RouterAgent] Calling Meta-LLM ${model}...`);
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'HTTP-Referer': 'http://localhost:3000',
-            'X-Title': 'FreeCouncil'
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0.0
-          })
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        let response: Response;
+
+        try {
+          response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+              'HTTP-Referer': 'http://localhost:3000',
+              'X-Title': 'FreeCouncil'
+            },
+            body: JSON.stringify({
+              model: model,
+              messages: [{ role: 'user', content: prompt }],
+              temperature: 0.0
+            }),
+            signal: controller.signal
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -119,7 +131,10 @@ export class RouterAgent {
         usedModel = model;
         break; // Success!
       } catch (err: any) {
-        console.warn(`[RouterAgent] Call to ${model} failed:`, err.message || err);
+        const message = err?.name === 'AbortError'
+          ? `Timed out after ${timeoutMs}ms`
+          : (err.message || err);
+        console.warn(`[RouterAgent] Call to ${model} failed:`, message);
       }
     }
 
