@@ -5,6 +5,7 @@ import { SettingsDeriver } from '../modules/settingsDeriver.js';
 import { PreflightGate } from '../modules/preflightGate.js';
 import { ConversationStore } from '../modules/conversationStore.js';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
+import { clearSessionCache } from '../agents/AgentOrchestrator.js';
 import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
@@ -80,6 +81,10 @@ interface SessionState {
 }
 
 const sessions = new Map<string, SessionState>();
+
+function finalizeDispatchSession(sessionId: string): void {
+  clearSessionCache(sessionId);
+}
 
 // Middleware to check API key present
 const requireApiKey = (req: Request, res: Response, next: () => void) => {
@@ -226,10 +231,12 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
         }
       },
       onError: (err) => {
+        finalizeDispatchSession(sessionId);
         res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
         res.end();
       },
       onComplete: () => {
+        finalizeDispatchSession(sessionId);
         const updatedMessages = [
           ...messages,
           {
@@ -321,10 +328,12 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       }
     },
     onError: (err) => {
+      finalizeDispatchSession(sessionId);
       res.write(`data: {"error": ${JSON.stringify(err.message)}}\n\n`);
       res.end();
     },
     onComplete: () => {
+      finalizeDispatchSession(sessionId);
       // Save transcript
       const updatedMessages = [
         ...messages,

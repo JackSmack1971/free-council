@@ -24,6 +24,10 @@ export function clearSessionCache(sessionId: string): void {
   proposerCache.delete(sessionId);
 }
 
+export function hasSessionCache(sessionId: string): boolean {
+  return proposerCache.has(sessionId);
+}
+
 async function fetchWithRateLimitBackoff(
   url: string,
   options: RequestInit,

@@ -6,14 +6,17 @@ import { apiRouter } from './api.js';
 import { runMigrations } from '../db/migrationRunner.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { db } from '../db/connection.js';
+import { hasSessionCache } from '../agents/AgentOrchestrator.js';
 
 describe('API Integration Tests', () => {
   let server: Server;
   let port: number;
+  let originalFetch: typeof fetch;
 
   before(async () => {
     // Setup migrations
     runMigrations();
+    originalFetch = globalThis.fetch;
 
     // Populate snapshots cache in SQLite with at least one free model so validation succeeds
     const mockModelList = [{
@@ -61,6 +64,7 @@ describe('API Integration Tests', () => {
   });
 
   after(() => {
+    globalThis.fetch = originalFetch;
     server.close();
   });
 
@@ -108,5 +112,77 @@ describe('API Integration Tests', () => {
     assert.ok(typeof body.usedToday === 'number');
     assert.strictEqual(body.dailyLimit, 200);
     assert.strictEqual(body.isEstimated, true);
+  });
+
+  test('POST /dispatch clears proposer cache after council completion', async () => {
+    globalThis.fetch = async (url, options: any) => {
+      if (typeof url === 'string' && url.startsWith('http://localhost:')) {
+        return originalFetch(url, options);
+      }
+
+      const body = JSON.parse(options.body);
+
+      if (body.model === 'openrouter/free' || body.model === 'inclusionai/ring-2.6-1t:free') {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  executionMode: 'goa_moa_hybrid',
+                  totalApiCalls: 3,
+                  samplingRationale: 'cache cleanup test',
+                  moaConfig: {
+                    layers: 1,
+                    proposersPerLayer: 1,
+                    aggregatorModelId: 'google/gemini-2.5-flash:free'
+                  },
+                  agents: [
+                    { role: 'Coder', modelId: 'qwen/qwen3-coder:free' }
+                  ]
+                })
+              }
+            }]
+          })
+        } as any;
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: `Response from ${body.model}`
+            }
+          }]
+        })
+      } as any;
+    };
+
+    const sessionRes = await fetch(`http://localhost:${port}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'council' })
+    });
+    assert.strictEqual(sessionRes.status, 201);
+    const sessionBody = await sessionRes.json() as any;
+
+    const dispatchRes = await fetch(`http://localhost:${port}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer test-key' },
+      body: JSON.stringify({
+        sessionId: sessionBody.sessionId,
+        messages: [{ role: 'user', content: 'Write a small function that reverses a string in JavaScript.' }],
+        settings: {
+          systemMode: 'council',
+          privacyDisclosureAcknowledged: true
+        }
+      })
+    });
+
+    assert.strictEqual(dispatchRes.status, 200);
+    const streamBody = await dispatchRes.text();
+    assert.ok(streamBody.includes('Response from qwen/qwen3-coder:free'));
+    assert.strictEqual(hasSessionCache(sessionBody.sessionId), false);
   });
 });
