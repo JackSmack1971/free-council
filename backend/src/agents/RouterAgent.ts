@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { NormalizedModelCapabilities, AgentPlan } from 'shared';
+import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -97,29 +98,20 @@ export class RouterAgent {
     for (const model of modelsToTry) {
       try {
         console.log(`[RouterAgent] Calling Meta-LLM ${model}...`);
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        let response: Response;
-
-        try {
-          response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-              'HTTP-Referer': 'http://localhost:3000',
-              'X-Title': 'FreeCouncil'
-            },
-            body: JSON.stringify({
-              model: model,
-              messages: [{ role: 'user', content: prompt }],
-              temperature: 0.0
-            }),
-            signal: controller.signal
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': getOpenRouterHttpReferer(),
+            'X-Title': 'FreeCouncil'
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.0
+          })
+        });
 
         if (!response.ok) {
           const errorText = await response.text();

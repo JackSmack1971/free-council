@@ -1,4 +1,26 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+const DEV_API_BASE = 'http://localhost:3001/api/v1';
+const PROD_API_BASE = '/api/v1';
+
+export function resolveApiBase(env: NodeJS.ProcessEnv = process.env): string {
+  const configuredBase = env.NEXT_PUBLIC_API_URL?.trim();
+
+  if (configuredBase) {
+    if (env.NODE_ENV === 'production' && configuredBase.startsWith('http://localhost')) {
+      console.warn('[Config] NEXT_PUBLIC_API_URL points to localhost in production.');
+    }
+
+    return configuredBase;
+  }
+
+  if (env.NODE_ENV === 'production') {
+    console.warn('[Config] NEXT_PUBLIC_API_URL is not set in production; defaulting to /api/v1.');
+    return PROD_API_BASE;
+  }
+
+  return DEV_API_BASE;
+}
+
+const API_BASE = resolveApiBase();
 
 export interface ModelInfo {
   modelId: string;
@@ -15,6 +37,13 @@ export interface QuotaInfo {
   dailyLimit: number;
   isEstimated: boolean;
   updatedAt: number;
+}
+
+export interface ModelPerformanceInfo {
+  modelId: string;
+  avgScore: number;
+  sessionCount: number;
+  lastSeen: number;
 }
 
 export const apiClient = {
@@ -48,6 +77,15 @@ export const apiClient = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || `Failed to fetch quota: HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  async getModelPerformance(): Promise<ModelPerformanceInfo[]> {
+    const res = await fetch(`${API_BASE}/model-performance`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to fetch model performance: HTTP ${res.status}`);
     }
     return res.json();
   },

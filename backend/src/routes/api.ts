@@ -9,6 +9,7 @@ import { clearSessionCache } from '../agents/AgentOrchestrator.js';
 import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
+import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -84,6 +85,10 @@ const sessions = new Map<string, SessionState>();
 
 function finalizeDispatchSession(sessionId: string): void {
   clearSessionCache(sessionId);
+}
+
+function writeSseErrorFrame(res: Response, message: string, partial: boolean): void {
+  res.write(`data: ${JSON.stringify({ type: 'error', message, partial })}\n\n`);
 }
 
 // Middleware to check API key present
@@ -203,6 +208,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
 
     let assistantResponse = '';
     let traceMetadata: any = null;
+    let hasStreamOutput = false;
 
     await dispatchCouncilChat({
       sessionId,
@@ -210,6 +216,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       runSettings: { ...settings, routingMode, manualModelId: session.modelId },
       apiKey,
       onChunk: (chunk) => {
+        hasStreamOutput = true;
         res.write(chunk);
         const lines = chunk.split('\n');
         for (const line of lines) {
@@ -232,7 +239,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       },
       onError: (err) => {
         finalizeDispatchSession(sessionId);
-        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        writeSseErrorFrame(res, err.message, hasStreamOutput);
         res.end();
       },
       onComplete: () => {
@@ -297,6 +304,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
   res.setHeader('Connection', 'keep-alive');
 
   let assistantResponse = '';
+  let hasStreamOutput = false;
 
   await dispatchSoloChat({
     sessionId,
@@ -310,6 +318,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     uploadDisclosureAcknowledged: !!settings.uploadDisclosureAcknowledged,
     containsUpload: !!settings.containsUpload,
     onChunk: (chunk) => {
+      hasStreamOutput = hasStreamOutput || chunk.length > 0;
       res.write(chunk);
       // Parse token from chunk to accumulate response
       const lines = chunk.split('\n');
@@ -329,7 +338,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     },
     onError: (err) => {
       finalizeDispatchSession(sessionId);
-      res.write(`data: {"error": ${JSON.stringify(err.message)}}\n\n`);
+      writeSseErrorFrame(res, err.message, hasStreamOutput);
       res.end();
     },
     onComplete: () => {
@@ -364,7 +373,7 @@ apiRouter.get('/quota', (req: Request, res: Response) => {
 
     res.json({
       usedToday,
-      dailyLimit: 200,
+      dailyLimit: getDailyApiQuotaLimit(),
       isEstimated: true,
       updatedAt
     });

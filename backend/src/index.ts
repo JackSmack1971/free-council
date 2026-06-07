@@ -7,6 +7,9 @@ import { apiRouter } from './routes/api.js';
 import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
 import { resolvePort } from './config/port.js';
+import { configureConsoleLogging } from './config/logger.js';
+
+configureConsoleLogging();
 
 const app = express();
 app.use(cors(buildCorsOptions()));
