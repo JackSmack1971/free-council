@@ -28,11 +28,13 @@ export async function executeSoloFallback(
   prompt: string,
   apiKey: string,
   sessionId: string,
-  reason: string
+  reason: string,
+  abortSignal?: AbortSignal
 ): Promise<AgentResult> {
   recordSoloFallback(sessionId, reason);
 
   const controller = new AbortController();
+  const signal = abortSignal ? AbortSignal.any([controller.signal, abortSignal]) : controller.signal;
   const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
 
   try {
@@ -48,7 +50,7 @@ export async function executeSoloFallback(
         model: DEFAULT_SOLO_FALLBACK_MODEL_ID,
         messages: [{ role: 'user', content: prompt }]
       }),
-      signal: controller.signal
+      signal
     });
 
     if (!response.ok) {

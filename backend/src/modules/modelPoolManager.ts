@@ -3,6 +3,8 @@ import { CapabilityDetector, OpenRouterModelMetadata } from './capabilityDetecto
 import { ModelCardSummarizer } from './modelCardSummarizer.js';
 import { db } from '../db/connection.js';
 
+export const MODEL_SNAPSHOT_TTL_MS = 60 * 60 * 1000;
+
 let currentFreeModels: NormalizedModelCapabilities[] = [];
 let currentCardSummaries: ModelCardSummary[] = [];
 let lastSnapshotTs: number | null = null;
@@ -49,6 +51,14 @@ export const ModelPoolManager = {
       const row = selectStmt.get() as { snapshot_ts: number; models_json: string; card_summaries_json: string } | undefined;
 
       if (row) {
+        const snapshotAgeMs = Date.now() - row.snapshot_ts;
+        if (snapshotAgeMs > MODEL_SNAPSHOT_TTL_MS) {
+          console.warn(
+            `[ModelPoolManager] Cached snapshot is stale (${snapshotAgeMs}ms old, ttl ${MODEL_SNAPSHOT_TTL_MS}ms). Keeping existing in-memory model pool.`
+          );
+          return;
+        }
+
         lastSnapshotTs = row.snapshot_ts;
         currentFreeModels = JSON.parse(row.models_json);
         currentCardSummaries = JSON.parse(row.card_summaries_json);

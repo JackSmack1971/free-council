@@ -2,6 +2,8 @@ import { db } from '../db/connection.js';
 import { TelemetryEngine } from './telemetryEngine.js';
 
 export const RetentionMonitor = {
+  intervalHandle: null as NodeJS.Timeout | null,
+
   async checkRetentionRate(): Promise<{
     totalRouted: number;
     totalCompleted: number;
@@ -68,9 +70,18 @@ export const RetentionMonitor = {
   },
 
   start(intervalMs = 60000): NodeJS.Timeout {
+    this.stop();
     console.log(`[RetentionMonitor] Starting retention monitor with interval ${intervalMs}ms`);
-    return setInterval(() => {
+    this.intervalHandle = setInterval(() => {
       this.checkRetentionRate();
     }, intervalMs);
+    return this.intervalHandle;
+  },
+
+  stop(): void {
+    if (this.intervalHandle) {
+      clearInterval(this.intervalHandle);
+      this.intervalHandle = null;
+    }
   }
 };

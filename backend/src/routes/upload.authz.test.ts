@@ -1,12 +1,14 @@
-import { after, before, beforeEach, describe, test } from 'node:test';
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import express from 'express';
 import { Server } from 'http';
-import { uploadRouter } from './upload.js';
-import { runMigrations } from '../db/migrationRunner.js';
+import { after, before, beforeEach, describe, test } from 'node:test';
+
 import { db } from '../db/connection.js';
-import { FileProcessor } from '../modules/fileProcessor.js';
+import { runMigrations } from '../db/migrationRunner.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
+import { FileProcessor } from '../modules/fileProcessor.js';
+import { SessionRegistry } from '../modules/sessionRegistry.js';
+import { uploadRouter } from './upload.js';
 
 function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): Buffer {
   return Buffer.from(
@@ -19,7 +21,7 @@ function buildMultipartBody(boundary: string, filename: string, mimeType: string
   );
 }
 
-describe('uploadRouter', () => {
+describe('upload authorization', () => {
   let server: Server;
   let port: number;
   let originalIngest: typeof FileProcessor.ingest;
@@ -35,16 +37,19 @@ describe('uploadRouter', () => {
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
-        const addr = server.address();
-        if (addr && typeof addr === 'object') {
-          port = addr.port;
+        const address = server.address();
+        if (!address || typeof address !== 'object') {
+          throw new Error('Expected test server to bind to a port.');
         }
+
+        port = address.port;
         resolve();
       });
     });
   });
 
   beforeEach(() => {
+    SessionRegistry.clearForTests();
     db.exec('DELETE FROM uploaded_file_chunks_fts');
     db.exec('DELETE FROM uploaded_file_chunks');
     db.exec('DELETE FROM uploaded_files');
@@ -59,8 +64,9 @@ describe('uploadRouter', () => {
     server.close();
   });
 
-  test('removes uploaded_files metadata when FTS indexing fails', async () => {
-    const sessionId = 'session-upload-failure';
+  test('POST /upload rejects non-owner API keys', async () => {
+    const sessionId = 'session-upload-authz';
+    SessionRegistry.createSession(sessionId, 'openrouter/free', 'council', 'owner-key');
     db.prepare(`
       INSERT INTO policy_exceptions
       (ts, violation_type, model_id, user_action, session_id, details_json, previous_hash, hash)
@@ -75,24 +81,18 @@ describe('uploadRouter', () => {
       chunks: [{ index: 0, text: 'hello world', startChar: 0, endChar: 11 }]
     });
 
-    FtsSearchService.indexChunks = () => {
-      throw new Error('Simulated indexing failure');
-    };
+    FtsSearchService.indexChunks = () => {};
 
-    const boundary = '----free-council-upload-test';
+    const boundary = '----free-council-upload-authz-test';
     const response = await fetch(`http://localhost:${port}/upload?sessionId=${sessionId}`, {
       method: 'POST',
       headers: {
+        'Authorization': 'Bearer foreign-key',
         'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
       body: buildMultipartBody(boundary, 'notes.txt', 'text/plain', 'hello world')
     });
 
-    assert.strictEqual(response.status, 500);
-    const body = await response.json() as { error: string };
-    assert.match(body.error, /Simulated indexing failure/);
-
-    const storedFiles = db.prepare('SELECT id FROM uploaded_files WHERE session_id = ?').all(sessionId) as Array<{ id: string }>;
-    assert.strictEqual(storedFiles.length, 0);
+    assert.equal(response.status, 403);
   });
 });

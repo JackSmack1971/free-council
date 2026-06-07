@@ -58,6 +58,7 @@ interface DispatchOptions {
   zdrRequired?: boolean;
   uploadDisclosureAcknowledged?: boolean;
   containsUpload?: boolean;
+  abortSignal?: AbortSignal;
   onChunk: (chunk: string) => void;
   onError: (err: any) => void;
   onComplete: () => void;
@@ -75,6 +76,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
     zdrRequired = false,
     uploadDisclosureAcknowledged = false,
     containsUpload = false,
+    abortSignal,
     onChunk,
     onError,
     onComplete
@@ -139,6 +141,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
     let retryAttempt = 0;
     while (true) {
       const controller = new AbortController();
+      const signal = abortSignal ? AbortSignal.any([controller.signal, abortSignal]) : controller.signal;
       const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
       let response: Response;
       try {
@@ -151,7 +154,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
             'X-Title': 'FreeCouncil'
           },
           body: JSON.stringify(body),
-          signal: controller.signal
+          signal
         });
       } finally {
         clearTimeout(timeoutId);
@@ -230,6 +233,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
       ...baseSettings
     };
     const controller = new AbortController();
+    const signal = abortSignal ? AbortSignal.any([controller.signal, abortSignal]) : controller.signal;
     const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
     let resp: Response;
     try {
@@ -242,7 +246,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
           'X-Title': 'FreeCouncil'
         },
         body: JSON.stringify(body),
-        signal: controller.signal
+        signal
       });
     } finally {
       clearTimeout(timeoutId);

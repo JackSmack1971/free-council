@@ -13,6 +13,7 @@ interface CouncilDispatchOptions {
   messages: any[];
   runSettings: Record<string, any>;
   apiKey: string;
+  abortSignal?: AbortSignal;
   onChunk: (chunk: string) => void;
   onError: (err: any) => void;
   onComplete: () => void;
@@ -28,6 +29,7 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     messages,
     runSettings,
     apiKey,
+    abortSignal,
     onChunk,
     onError,
     onComplete
@@ -95,10 +97,10 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     const containsUpload = !!runSettings.containsUpload;
     const freeLockEnabled = runSettings.freeLockEnabled !== false;
     const budgetEscalated = !!runSettings.budgetEscalated;
-    const plan = await RouterAgent.sampleAgents(
+      const plan = await RouterAgent.sampleAgents(
       query, freeModels, k, apiKey, containsUpload,
       effort, promptClass === 'complex' ? 'non_trivial' : 'simple',
-      freeLockEnabled, budgetEscalated
+      freeLockEnabled, budgetEscalated, abortSignal
     );
     plan.reasoningEffort = effort as 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 
@@ -191,7 +193,7 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
       const attachmentsContext = containsUpload ? enrichedQuery : '';
       generator = AgentOrchestrator.executeGoAMoAHybrid(plan, enrichedQuery, apiKey, sessionId, attachmentsContext);
     } else {
-      generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId);
+      generator = AgentOrchestrator.executeGoALite(plan, enrichedQuery, apiKey, sessionId, abortSignal);
     }
 
     let primaryResult: AgentResult | null = null;

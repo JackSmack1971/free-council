@@ -1,9 +1,19 @@
 import { SessionEvent } from 'shared';
 import { db } from '../db/connection.js';
 
+const lastEventTsBySession = new Map<string, number>();
+
+function reserveEventTimestamp(sessionId: string, requestedTs?: number): number {
+  const baseTs = requestedTs ?? Date.now();
+  const lastTs = lastEventTsBySession.get(sessionId);
+  const nextTs = lastTs === undefined ? baseTs : Math.max(baseTs, lastTs + 1);
+  lastEventTsBySession.set(sessionId, nextTs);
+  return nextTs;
+}
+
 export const TelemetryEngine = {
   record(event: SessionEvent): void {
-    const ts = event.ts || Date.now();
+    const ts = reserveEventTimestamp(event.session_id, event.ts);
     try {
       const stmt = db.prepare(`
         INSERT INTO session_events (
@@ -38,6 +48,10 @@ export const TelemetryEngine = {
     } catch (err) {
       console.error(`[TelemetryEngine] Failed to record event:`, err);
     }
+  },
+
+  clearSessionState(sessionId: string): void {
+    lastEventTsBySession.delete(sessionId);
   },
 
   queryCouncilRetentionRate(windowSeconds: number): number | null {
