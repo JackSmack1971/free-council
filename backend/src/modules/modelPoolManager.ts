@@ -29,10 +29,6 @@ export const ModelPoolManager = {
         }
       }
 
-      currentFreeModels = normalized;
-      currentCardSummaries = summaries;
-
-      // Save to database
       const snapshotTs = Date.now();
       const insertStmt = db.prepare('INSERT INTO model_snapshots (snapshot_ts, models_json, card_summaries_json) VALUES (?, ?, ?)');
       insertStmt.run(
@@ -41,6 +37,8 @@ export const ModelPoolManager = {
         JSON.stringify(summaries)
       );
 
+      currentFreeModels = normalized;
+      currentCardSummaries = summaries;
       lastSnapshotTs = snapshotTs;
       console.log(`[ModelPoolManager] Refreshed successfully. Found ${normalized.length} free models. Saved snapshot at ${snapshotTs}.`);
     } catch (err) {
@@ -56,10 +54,7 @@ export const ModelPoolManager = {
         currentCardSummaries = JSON.parse(row.card_summaries_json);
         console.log(`[ModelPoolManager] Loaded ${currentFreeModels.length} models from cache snapshot.`);
       } else {
-        console.error('[ModelPoolManager] No database snapshots found. Model pool is empty.');
-        currentFreeModels = [];
-        currentCardSummaries = [];
-        lastSnapshotTs = null;
+        console.error('[ModelPoolManager] No database snapshots found. Keeping existing in-memory model pool.');
       }
     }
   },
