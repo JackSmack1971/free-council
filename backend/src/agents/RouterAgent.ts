@@ -49,7 +49,8 @@ export class RouterAgent {
     reasoningEffort: string = 'Balanced',
     promptClass: 'simple' | 'non_trivial' = 'non_trivial',
     freeLockEnabled: boolean = true,
-    budgetEscalated: boolean = false
+    budgetEscalated: boolean = false,
+    abortSignal?: AbortSignal
   ): Promise<AgentPlan> {
     // 1. Filter models to ensure we only present free models
     const freeModels = models.filter(m => m.is_free);
@@ -107,7 +108,8 @@ export class RouterAgent {
             model: model,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.0
-          })
+          }),
+          signal: abortSignal
         });
 
         if (!response.ok) {
