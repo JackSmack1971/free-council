@@ -169,6 +169,6 @@ uploadRouter.post('/', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('[upload] Processing failed:', err);
-    return res.status(500).json({ error: 'File processing failed: ' + err.message });
+    return res.status(500).json({ error: 'File processing failed.' });
   }
 });

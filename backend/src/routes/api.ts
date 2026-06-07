@@ -82,6 +82,9 @@ interface SessionState {
 }
 
 const sessions = new Map<string, SessionState>();
+export const GENERIC_REQUEST_ERROR = 'An error occurred while processing your request.';
+export const GENERIC_CONFIG_READ_ERROR = 'Failed to retrieve configuration.';
+export const GENERIC_CONFIG_UPDATE_ERROR = 'Failed to update configuration.';
 
 function finalizeDispatchSession(sessionId: string): void {
   clearSessionCache(sessionId);
@@ -89,6 +92,16 @@ function finalizeDispatchSession(sessionId: string): void {
 
 function writeSseErrorFrame(res: Response, message: string, partial: boolean): void {
   res.write(`data: ${JSON.stringify({ type: 'error', message, partial })}\n\n`);
+}
+
+export function reportDispatchError(
+  res: Response,
+  context: 'council' | 'solo',
+  err: unknown,
+  partial: boolean
+): void {
+  console.error(`[dispatch:${context}] Request failed:`, err);
+  writeSseErrorFrame(res, GENERIC_REQUEST_ERROR, partial);
 }
 
 // Middleware to check API key present
@@ -239,7 +252,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       },
       onError: (err) => {
         finalizeDispatchSession(sessionId);
-        writeSseErrorFrame(res, err.message, hasStreamOutput);
+        reportDispatchError(res, 'council', err, hasStreamOutput);
         res.end();
       },
       onComplete: () => {
@@ -338,7 +351,7 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     },
     onError: (err) => {
       finalizeDispatchSession(sessionId);
-      writeSseErrorFrame(res, err.message, hasStreamOutput);
+      reportDispatchError(res, 'solo', err, hasStreamOutput);
       res.end();
     },
     onComplete: () => {
@@ -453,8 +466,9 @@ apiRouter.get('/config', (req: Request, res: Response) => {
       configObj[row.key] = row.value;
     }
     res.json(configObj);
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to retrieve configuration: ' + err.message });
+  } catch (err) {
+    console.error('[config] Failed to retrieve configuration:', err);
+    res.status(500).json({ error: GENERIC_CONFIG_READ_ERROR });
   }
 });
 
@@ -510,8 +524,9 @@ apiRouter.post('/config', (req: Request, res: Response) => {
       db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('demoted_by_retention', ?)").run(String(demoted_by_retention));
     }
     res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to update configuration: ' + err.message });
+  } catch (err) {
+    console.error('[config] Failed to update configuration:', err);
+    res.status(500).json({ error: GENERIC_CONFIG_UPDATE_ERROR });
   }
 });
 
