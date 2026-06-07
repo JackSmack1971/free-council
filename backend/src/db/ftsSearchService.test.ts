@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { runMigrations } from './migrationRunner.js';
 import { db } from './connection.js';
 import { UploadedFilesRepo } from './uploadedFilesRepo.js';
-import { FtsSearchService } from './ftsSearchService.js';
+import { buildFtsQuery, FtsSearchService } from './ftsSearchService.js';
 
 describe('FtsSearchService tests', () => {
   before(() => {
@@ -79,5 +79,18 @@ describe('FtsSearchService tests', () => {
     assert.strictEqual(results3[0].fileId, 'file-2');
     assert.strictEqual(results3[0].filename, 'cooking_recipes.txt');
     assert.match(results3[0].content, /Chocolate chip cookies/);
+  });
+
+  test('buildFtsQuery drops empty and malformed tokens', () => {
+    assert.strictEqual(buildFtsQuery('   "" !!!   '), null);
+    assert.strictEqual(buildFtsQuery('quantum "" OR'), '"quantum" OR "OR"');
+  });
+
+  test('searchFileContent treats operator-like input as literal tokens without throwing', () => {
+    const results = FtsSearchService.searchFileContent('session-111', 'quantum "" OR NOT');
+
+    assert.ok(results.length >= 1);
+    assert.ok(results.every((result) => result.fileId === 'file-1'));
+    assert.match(results[0].content, /Quantum mechanics|Black holes/);
   });
 });

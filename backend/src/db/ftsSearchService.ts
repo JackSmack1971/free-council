@@ -7,6 +7,23 @@ export interface SearchResult {
   content: string;
 }
 
+export function buildFtsQuery(queryText: string): string | null {
+  if (!queryText || !queryText.trim()) {
+    return null;
+  }
+
+  const words = queryText
+    .split(/\s+/)
+    .map((word) => word.replace(/"/g, '""').replace(/[^a-zA-Z0-9]/g, '').trim())
+    .filter((word) => word.length > 0);
+
+  if (words.length === 0) {
+    return null;
+  }
+
+  return words.map((word) => `"${word}"`).join(' OR ');
+}
+
 export class FtsSearchService {
   /**
    * Indexes text chunks of an uploaded file into both the metadata chunks table
@@ -61,25 +78,10 @@ export class FtsSearchService {
    * Queries the FTS5 table for matching chunks in a given session using BM25 ranking.
    */
   static searchFileContent(sessionId: string, queryText: string, limit = 5): SearchResult[] {
-    if (!queryText || !queryText.trim()) {
+    const ftsQuery = buildFtsQuery(queryText);
+    if (!ftsQuery) {
       return [];
     }
-
-    // Sanitize query text for FTS5 syntax safety
-    const words = queryText
-      .replace(/[^a-zA-Z0-9\s]/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .filter(w => w.length > 0);
-
-    if (words.length === 0) {
-      return [];
-    }
-
-    // Construct simple FTS5 search query: "word1 OR word2 OR ..." or "word1 word2"
-    // Let's use simple space-separated terms for logical AND matching,
-    // or OR matching. Double quotes around each word prevent syntax errors.
-    const ftsQuery = words.map(w => `"${w}"`).join(' OR ');
 
     try {
       const stmt = db.prepare(`
