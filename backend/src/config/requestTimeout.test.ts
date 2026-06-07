@@ -12,7 +12,21 @@ describe('requestTimeout', () => {
   });
 
   test('falls back to the default timeout for invalid values', () => {
-    assert.strictEqual(getRequestTimeoutMs('not-a-number'), 30000);
-    assert.strictEqual(getRequestTimeoutMs('0'), 30000);
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: any) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      assert.strictEqual(getRequestTimeoutMs('not-a-number'), 30000);
+      assert.strictEqual(getRequestTimeoutMs('0'), 30000);
+      assert.strictEqual(getRequestTimeoutMs('60s'), 30000);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.strictEqual(warnings.length, 3);
+    assert.ok(warnings.some((warning) => warning.includes('REQUEST_TIMEOUT_MS "60s"')));
   });
 });

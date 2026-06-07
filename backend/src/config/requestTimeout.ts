@@ -6,8 +6,18 @@ export function getRequestTimeoutMs(envValue: string | undefined = process.env.R
     return DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
+  if (!/^\d+$/.test(trimmed)) {
+    console.warn(
+      `[requestTimeout] Invalid REQUEST_TIMEOUT_MS "${trimmed}", using default ${DEFAULT_REQUEST_TIMEOUT_MS}ms`
+    );
+    return DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
   const parsed = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[requestTimeout] Invalid REQUEST_TIMEOUT_MS "${trimmed}", using default ${DEFAULT_REQUEST_TIMEOUT_MS}ms`
+    );
     return DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
