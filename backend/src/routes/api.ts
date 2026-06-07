@@ -8,6 +8,7 @@ import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
+import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -355,7 +356,7 @@ apiRouter.get('/quota', (req: Request, res: Response) => {
 
     res.json({
       usedToday,
-      dailyLimit: 200,
+      dailyLimit: getDailyApiQuotaLimit(),
       isEstimated: true,
       updatedAt
     });
