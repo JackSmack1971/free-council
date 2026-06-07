@@ -2,6 +2,7 @@ import { AgentResult } from 'shared';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { dispatchSoloChat } from './soloDispatch.js';
 import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
+import { getRequestTimeoutMs } from '../config/requestTimeout.js';
 
 export const DEFAULT_SOLO_FALLBACK_MODEL_ID = 'meta-llama/llama-3.3-70b-instruct:free';
 
@@ -32,7 +33,7 @@ export async function executeSoloFallback(
   recordSoloFallback(sessionId, reason);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
