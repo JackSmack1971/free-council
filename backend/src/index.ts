@@ -5,6 +5,7 @@ import { ModelPoolManager } from './modules/modelPoolManager.js';
 import { apiRouter } from './routes/api.js';
 import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
+import { resolvePort } from './config/port.js';
 
 const app = express();
 app.use(cors());
@@ -17,7 +18,15 @@ app.use('/api/v1/upload', uploadRouter);
 app.use('/', apiRouter);
 app.use('/upload', uploadRouter);
 
-const PORT = process.env.PORT || 3001;
+const PORT = (() => {
+  try {
+    return resolvePort();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Startup] Invalid PORT configuration: ${message}`);
+    process.exit(1);
+  }
+})();
 
 async function startServer() {
   console.log('[Startup] Running migrations...');
