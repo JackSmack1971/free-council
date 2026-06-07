@@ -3,11 +3,13 @@ import assert from 'node:assert';
 import { AgentOrchestrator } from './AgentOrchestrator.js';
 import { AgentPlan, AgentResult } from 'shared';
 import { db } from '../db/connection.js';
+import { runMigrations } from '../db/migrationRunner.js';
 
 describe('AgentOrchestrator tests', () => {
   let originalFetch: typeof fetch;
 
   before(() => {
+    runMigrations();
     originalFetch = globalThis.fetch;
   });
 
@@ -286,8 +288,9 @@ describe('AgentOrchestrator tests', () => {
     assert.strictEqual(primary.modelId, 'meta-llama/llama-3.3-70b-instruct:free');
     assert.strictEqual(primary.response, 'Solo fallback output');
 
-    // Verify DB records solo_fallback event
-    const row = db.prepare('SELECT * FROM session_events WHERE session_id = ? AND event_type = ?').get(sessionId, 'solo_fallback') as any;
+    // Verify DB records the shared solo fallback event
+    const row = db.prepare('SELECT * FROM session_events WHERE session_id = ? AND event_type = ?').get(sessionId, 'routed_to_solo') as any;
     assert.ok(row);
+    assert.strictEqual(row.synthesis_rationale, 'double_timeout');
   });
 });
