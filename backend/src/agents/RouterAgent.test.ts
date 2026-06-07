@@ -111,8 +111,8 @@ describe('RouterAgent GoA sampling tests', () => {
 
     const plan = await RouterAgent.sampleAgents('write a fast web server in typescript', dummyModels, 3, 'dummy-key');
 
-    assert.strictEqual(plan.executionMode, 'goa_lite');
-    assert.strictEqual(plan.totalApiCalls, 3);
+    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
+    assert.strictEqual(plan.totalApiCalls, 4);
     assert.strictEqual(plan.agents.length, 2);
     assert.strictEqual(plan.agents[0].role, 'Coder');
     assert.strictEqual(plan.agents[0].modelId, 'qwen/qwen-2.5-72b-instruct:free');
@@ -171,11 +171,40 @@ describe('RouterAgent GoA sampling tests', () => {
     const plan = await RouterAgent.sampleAgents('some query', dummyModels, 3, 'dummy-key');
 
     assert.ok(plan.agents.length > 0);
-    assert.strictEqual(plan.executionMode, 'goa_lite');
+    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
     for (const agent of plan.agents) {
       const match = dummyModels.find(m => m.modelId === agent.modelId);
       assert.ok(match);
       assert.strictEqual(match.is_free, true);
     }
+  });
+
+  test('should abort hung router calls after timeout and fallback safely', async () => {
+    globalThis.fetch = async (_url: any, init: any) => {
+      return await new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }, { once: true });
+      });
+    };
+
+    const startedAt = Date.now();
+    const plan = await RouterAgent.sampleAgents(
+      'some query',
+      dummyModels,
+      3,
+      'dummy-key',
+      false,
+      'Balanced',
+      'non_trivial',
+      true,
+      false,
+      10
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs < 500, `Expected timeout fallback quickly, elapsed=${elapsedMs}ms`);
+    assert.ok(plan.agents.length > 0);
+    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
   });
 });

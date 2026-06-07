@@ -4,7 +4,7 @@ import { FileProcessor, UploadedFile } from '../modules/fileProcessor.js';
 import { db } from '../db/connection.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
 import { recordException } from '../db/policyExceptionsRepo.js';
-import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { extractBearerToken, SessionRegistry } from '../modules/sessionRegistry.js';
 
 export const uploadRouter = Router();
 const uploadRateLimiter = createRateLimitMiddleware({
@@ -80,6 +80,17 @@ uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) =>
   if (!sessionId) {
     return res.status(400).json({ error: 'sessionId is required as a query parameter' });
   }
+  const apiKey = extractBearerToken(req.headers.authorization);
+  if (!apiKey) {
+    return res.status(401).json({ error: 'API key is missing' });
+  }
+  const session = SessionRegistry.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  if (!SessionRegistry.isOwnedBy(sessionId, apiKey)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   // Check if disclosure is acknowledged via policy_exceptions
   const disclosureRow = db.prepare(
@@ -142,10 +153,12 @@ uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) =>
     size: filePart.data.length
   };
 
+  let fileId: string | null = null;
+
   try {
     // Process and extract text
     const processed = await FileProcessor.ingest(uploadedFile);
-    const fileId = crypto.randomUUID();
+    fileId = crypto.randomUUID();
 
     // INSERT into uploaded_files (raw binary is discarded — only metadata + text stored)
     db.prepare(`
@@ -174,6 +187,9 @@ uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) =>
       ftsIndexed: true
     });
   } catch (err: any) {
+    if (fileId) {
+      db.prepare('DELETE FROM uploaded_files WHERE id = ?').run(fileId);
+    }
     console.error('[upload] Processing failed:', err);
     return res.status(500).json({ error: 'File processing failed: ' + err.message });
   }
