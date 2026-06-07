@@ -6,6 +6,7 @@ import { ModelPoolManager } from './modules/modelPoolManager.js';
 import { apiRouter } from './routes/api.js';
 import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
+import { SessionCleanupMonitor } from './modules/sessionCleanupMonitor.js';
 import { resolvePort } from './config/port.js';
 import { configureConsoleLogging } from './config/logger.js';
 
@@ -47,6 +48,7 @@ async function startServer() {
     console.log(`[Startup] Server successfully started on port ${PORT}`);
     // Start retention monitoring (every 60 seconds)
     RetentionMonitor.start();
+    SessionCleanupMonitor.start();
   });
 }
 
