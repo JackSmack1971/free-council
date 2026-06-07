@@ -10,6 +10,7 @@ import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
+import { SessionStore } from '../modules/sessionStore.js';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -75,14 +76,6 @@ const DEFAULT_MODELS = [
   'nvidia/nemotron-nano-12b-v2-vl:free'
 ];
 
-interface SessionState {
-  sessionId: string;
-  modelId: string;
-  mode: string;
-}
-
-const sessions = new Map<string, SessionState>();
-
 function finalizeDispatchSession(sessionId: string): void {
   clearSessionCache(sessionId);
 }
@@ -96,15 +89,35 @@ function writeSseErrorFrame(res: Response, message: string, partial: boolean): v
 
 // Middleware to check API key present
 const requireApiKey = (req: Request, res: Response, next: () => void) => {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ') || auth.slice(7).trim().length === 0) {
+  if (!extractBearerToken(req.headers.authorization)) {
     return res.status(401).json({ error: 'API key is missing' });
   }
   next();
 };
 
+function requireOwnedSession(req: Request, res: Response, sessionId: string): SessionState | null {
+  const apiKey = extractBearerToken(req.headers.authorization);
+  if (!apiKey) {
+    res.status(401).json({ error: 'API key is missing' });
+    return null;
+  }
+
+  const session = SessionRegistry.getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return null;
+  }
+
+  if (!SessionRegistry.isOwnedBy(sessionId, apiKey)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+
+  return session;
+}
+
 // POST /session
-apiRouter.post('/session', (req: Request, res: Response) => {
+apiRouter.post('/session', requireApiKey, (req: Request, res: Response) => {
   const { modelId, mode } = req.body;
   if (!mode || (mode !== 'solo' && mode !== 'council')) {
     return res.status(400).json({ error: 'Invalid mode. Supported modes: solo, council.' });
@@ -135,8 +148,7 @@ apiRouter.post('/session', (req: Request, res: Response) => {
   }
 
   const sessionId = crypto.randomUUID();
-  const session: SessionState = { sessionId, modelId: activeModelId, mode };
-  sessions.set(sessionId, session);
+  SessionStore.createSession(sessionId, activeModelId, mode);
 
   res.status(201).json({
     sessionId,
@@ -189,13 +201,13 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing sessionId or messages' });
   }
 
-  const session = sessions.get(sessionId);
+  const session = SessionStore.getSession(sessionId);
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
+  SessionStore.touchSession(sessionId);
 
-  const authHeader = req.headers.authorization || '';
-  const apiKey = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  const apiKey = extractBearerToken(req.headers.authorization) ?? '';
 
   // Detect routing/system mode from request body
   const routingMode = (settings.routingMode || 'adaptive').toLowerCase();
@@ -435,6 +447,8 @@ apiRouter.get('/quota', (req: Request, res: Response) => {
 
 // GET /session/:id/messages
 apiRouter.get('/session/:id/messages', (req: Request, res: Response) => {
+  if (!requireOwnedSession(req, res, req.params.id)) return;
+
   const messages = ConversationStore.getConversation(req.params.id);
   if (!messages) {
     return res.status(404).json({ error: 'Session not found' });
@@ -443,11 +457,19 @@ apiRouter.get('/session/:id/messages', (req: Request, res: Response) => {
 });
 
 // GET /sessions
-apiRouter.get('/sessions', (req: Request, res: Response) => {
+apiRouter.get('/sessions', requireApiKey, (req: Request, res: Response) => {
   try {
+    const apiKey = extractBearerToken(req.headers.authorization);
+    if (!apiKey) {
+      return res.status(401).json({ error: 'API key is missing' });
+    }
+
+    const ownedSessionIds = new Set(SessionRegistry.listOwnedSessionIds(apiKey));
     const stmt = db.prepare('SELECT id, ts FROM conversations ORDER BY ts DESC');
     const rows = stmt.all() as { id: string; ts: number }[];
-    res.json({ sessions: rows });
+    res.json({
+      sessions: rows.filter((row) => ownedSessionIds.has(row.id))
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to query sessions list' });
   }
@@ -456,9 +478,15 @@ apiRouter.get('/sessions', (req: Request, res: Response) => {
 // PATCH /session/:id/revert — abort council session and record reverted_to_solo
 apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
   const sessionId = req.params.id;
-  if (!sessions.has(sessionId) && !sessionId) {
+  if (!sessionId) {
     return res.status(404).json({ error: 'Session not found' });
   }
+
+  const session = SessionStore.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
   try {
     TelemetryEngine.record({
       session_id: sessionId,
@@ -466,11 +494,7 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
       api_calls: 0,
       ts: Date.now()
     });
-    // Update session mode to solo
-    const session = sessions.get(sessionId);
-    if (session) {
-      session.mode = 'solo';
-    }
+    SessionStore.updateSessionMode(sessionId, 'solo');
     return res.json({ success: true, sessionId });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to record revert event' });
@@ -481,6 +505,10 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
 apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
   const { eventType, apiCalls, synthesisRationale } = req.body;
   const sessionId = req.params.id;
+  if (!SessionStore.getSession(sessionId)) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
   try {
     TelemetryEngine.record({
       session_id: sessionId,
@@ -489,6 +517,7 @@ apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
       synthesis_rationale: synthesisRationale,
       ts: Date.now()
     });
+    SessionStore.touchSession(sessionId);
     res.status(201).json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to record event' });

@@ -4,6 +4,7 @@ import { FileProcessor, UploadedFile } from '../modules/fileProcessor.js';
 import { db } from '../db/connection.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
 import { recordException } from '../db/policyExceptionsRepo.js';
+import { extractBearerToken, SessionRegistry } from '../modules/sessionRegistry.js';
 
 export const uploadRouter = Router();
 
@@ -73,6 +74,17 @@ uploadRouter.post('/', async (req: Request, res: Response) => {
   const sessionId = req.query.sessionId as string || '';
   if (!sessionId) {
     return res.status(400).json({ error: 'sessionId is required as a query parameter' });
+  }
+  const apiKey = extractBearerToken(req.headers.authorization);
+  if (!apiKey) {
+    return res.status(401).json({ error: 'API key is missing' });
+  }
+  const session = SessionRegistry.getSession(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  if (!SessionRegistry.isOwnedBy(sessionId, apiKey)) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   // Check if disclosure is acknowledged via policy_exceptions
