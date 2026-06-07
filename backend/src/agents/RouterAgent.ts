@@ -110,7 +110,8 @@ export class RouterAgent {
             model: model,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.0
-          })
+          }),
+          signal: abortSignal
         });
 
         if (!response.ok) {

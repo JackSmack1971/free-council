@@ -4,6 +4,7 @@ import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { renderAggregatorPrompt } from './moa/index.js';
 import { executeSoloFallback } from '../dispatch/soloFallback.js';
 import { getRequestTimeoutMs } from '../config/requestTimeout.js';
+import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 // In-memory proposer response cache, keyed by (modelId + "|" + promptHash), scoped per session
 const proposerCache = new Map<string, Map<string, string>>();
@@ -35,15 +36,17 @@ async function fetchWithRateLimitBackoff(
   options: RequestInit,
   apiKey: string,
   sessionId: string | undefined,
-  maxRetries: number = 2
+  maxRetries: number = 2,
+  abortSignal?: AbortSignal
 ): Promise<Response> {
   let retryCount = 0;
   while (true) {
     const controller = new AbortController();
+    const signal = abortSignal ? AbortSignal.any([controller.signal, abortSignal]) : controller.signal;
     const timeoutId = setTimeout(() => controller.abort(), getRequestTimeoutMs());
     let response: Response;
     try {
-      response = await fetch(url, { ...options, signal: controller.signal });
+      response = await fetch(url, { ...options, signal });
     } finally {
       clearTimeout(timeoutId);
     }
@@ -71,7 +74,8 @@ async function callAgentWithTimeoutAndRetry(
   prompt: string,
   apiKey: string,
   temperature: number = 0.7,
-  sessionId?: string
+  sessionId?: string,
+  abortSignal?: AbortSignal
 ): Promise<{ text: string; usedFallback: boolean; failureReason?: string }> {
   let attempts = 0;
   const maxAttempts = 2; // 1 initial + 1 fallback retry
@@ -98,7 +102,9 @@ async function callAgentWithTimeoutAndRetry(
           })
         },
         apiKey,
-        sessionId
+        sessionId,
+        2,
+        abortSignal
       );
 
       if (!response.ok) {
@@ -144,7 +150,8 @@ async function callAgentWithCache(
   prompt: string,
   apiKey: string,
   temperature: number,
-  sessionId: string
+  sessionId: string,
+  abortSignal?: AbortSignal
 ): Promise<{ text: string; fromCache: boolean }> {
   const cache = getSessionCache(sessionId);
   const cacheKey = getCacheKey(agent.modelId, prompt);
@@ -153,7 +160,7 @@ async function callAgentWithCache(
     return { text: cache.get(cacheKey)!, fromCache: true };
   }
 
-  const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, temperature, sessionId);
+  const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, temperature, sessionId, abortSignal);
   cache.set(cacheKey, text);
   return { text, fromCache: false };
 }
@@ -164,7 +171,8 @@ export const AgentOrchestrator = {
     prompt: string,
     apiKey: string,
     sessionId: string,
-    attachmentsContext: string = ''
+    attachmentsContext: string = '',
+    abortSignal?: AbortSignal
   ): AsyncIterableIterator<AgentResult> {
     const moaConfig = plan.moaConfig || { layers: 1, proposersPerLayer: 3, aggregatorModelId: 'openrouter/owl-alpha' };
     const proposerAgents = plan.agents.slice(0, Math.min(plan.agents.length, moaConfig.proposersPerLayer));
@@ -190,7 +198,7 @@ export const AgentOrchestrator = {
     await Promise.all(
       proposerAgents.map(async (agent) => {
         try {
-          const { text, fromCache } = await callAgentWithCache(agent, contextPrompt, apiKey, 0.7, sessionId);
+          const { text, fromCache } = await callAgentWithCache(agent, contextPrompt, apiKey, 0.7, sessionId, abortSignal);
           if (fromCache) cacheHits++;
           proposerResults.push({ role: agent.role, modelId: agent.modelId, response: text, fromCache });
           proposerOutcomes.push({ agent, text, fromCache });
@@ -211,7 +219,7 @@ export const AgentOrchestrator = {
     }
 
     if (hasDoubleTimeout) {
-      const fallback = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
+      const fallback = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout', abortSignal);
       yield fallback;
       return;
     }
@@ -255,7 +263,8 @@ export const AgentOrchestrator = {
           renderedPrompt,
           apiKey,
           0.3,
-          sessionId
+          sessionId,
+          abortSignal
         );
         aggregatedResponse = text;
         break;
@@ -311,7 +320,8 @@ export const AgentOrchestrator = {
     plan: AgentPlan,
     prompt: string,
     apiKey: string,
-    sessionId: string
+    sessionId: string,
+    abortSignal?: AbortSignal
   ): AsyncIterableIterator<AgentResult> {
     // Steps 1-4: GoA-lite (parallel responses + S scoring + pruning + adjacency matrix)
     const activeAgents = plan.agents.slice(0, 5);
@@ -330,7 +340,7 @@ export const AgentOrchestrator = {
     const initialResponses: AgentResult[] = [];
     await Promise.all(activeAgents.map(async (agent) => {
       try {
-        const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId);
+        const { text } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId, abortSignal);
         initialResponses.push({ role: agent.role, modelId: agent.modelId, response: text, status: 'completed' });
       } catch (err: any) {
         initialResponses.push({ role: agent.role, modelId: agent.modelId, response: '', status: 'failed', error: err.message });
@@ -363,7 +373,7 @@ export const AgentOrchestrator = {
           const refinePrompt = `Original query: ${prompt}\n\nHigher-quality responses:\n${highSText}\n\nPlease improve upon your previous response: ${lowAgent.response}\n\nProvide an improved response:`;
           const { text } = await callAgentWithTimeoutAndRetry(
             { role: lowAgent.role, modelId: lowAgent.modelId },
-            refinePrompt, apiKey, 0.5, sessionId
+            refinePrompt, apiKey, 0.5, sessionId, abortSignal
           );
           const idx = refinedResponses.findIndex(r => r.role === lowAgent.role);
           if (idx >= 0) refinedResponses[idx] = { ...refinedResponses[idx], response: text };
@@ -382,7 +392,7 @@ export const AgentOrchestrator = {
           const refinePrompt = `Original query: ${prompt}\n\nOther agent responses:\n${lowSText}\n\nRefine your response considering these: ${highAgent.response}\n\nProvide a refined response:`;
           const { text } = await callAgentWithTimeoutAndRetry(
             { role: highAgent.role, modelId: highAgent.modelId },
-            refinePrompt, apiKey, 0.5, sessionId
+            refinePrompt, apiKey, 0.5, sessionId, abortSignal
           );
           const idx = refinedResponses.findIndex(r => r.role === highAgent.role);
           if (idx >= 0) refinedResponses[idx] = { ...refinedResponses[idx], response: text };
@@ -415,7 +425,8 @@ export const AgentOrchestrator = {
     plan: AgentPlan,
     prompt: string,
     apiKey: string,
-    sessionId: string
+    sessionId: string,
+    abortSignal?: AbortSignal
   ): AsyncIterableIterator<AgentResult> {
     // 1. Cap to top 5 agents
     const activeAgents = plan.agents.slice(0, 5);
@@ -452,7 +463,7 @@ export const AgentOrchestrator = {
     activeAgents.forEach(async (agent) => {
       const startTime = Date.now();
       try {
-        const { text, usedFallback, failureReason } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId);
+        const { text, usedFallback, failureReason } = await callAgentWithTimeoutAndRetry(agent, prompt, apiKey, 0.7, sessionId, abortSignal);
         const result: AgentResult = {
           role: agent.role,
           modelId: agent.modelId,
@@ -499,7 +510,7 @@ export const AgentOrchestrator = {
     // Handle double timeout fallback to solo mode
     if (hasDoubleTimeout) {
       console.warn('[AgentOrchestrator] Double timeout detected on initial agent calls. Falling back to Solo Mode.');
-      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
+      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout', abortSignal);
       yield fallbackResult;
       return;
     }
@@ -580,7 +591,7 @@ You MUST output your evaluation in the following JSON format:
 Do not include any thinking, explanation, markdown formatting, or other text. Return ONLY the JSON object.`;
 
       try {
-        const { text: rawResponse } = await callAgentWithTimeoutAndRetry(scorerAgent, scoringPrompt, apiKey, 0.1, sessionId);
+        const { text: rawResponse } = await callAgentWithTimeoutAndRetry(scorerAgent, scoringPrompt, apiKey, 0.1, sessionId, abortSignal);
         let content = rawResponse.trim();
         if (content.includes('```')) {
           const match = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
@@ -617,7 +628,7 @@ Do not include any thinking, explanation, markdown formatting, or other text. Re
 
     if (hasDoubleTimeout) {
       console.warn('[AgentOrchestrator] Double timeout detected during scoring calls. Falling back to Solo Mode.');
-      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout');
+      const fallbackResult = await executeSoloFallback(prompt, apiKey, sessionId, 'double_timeout', abortSignal);
       yield fallbackResult;
       return;
     }

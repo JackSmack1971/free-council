@@ -81,6 +81,9 @@ function finalizeDispatchSession(sessionId: string): void {
 }
 
 function writeSseErrorFrame(res: Response, message: string, partial: boolean): void {
+  if (res.writableEnded || res.destroyed) {
+    return;
+  }
   res.write(`data: ${JSON.stringify({ type: 'error', message, partial })}\n\n`);
 }
 
@@ -212,6 +215,26 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
 
   // Council mode: when session is council AND not manual routing AND not overridden to solo
   const useCouncil = systemMode === 'council' && routingMode !== 'manual';
+  const disconnectController = new AbortController();
+  let streamClosed = false;
+  let sessionFinalized = false;
+
+  const finalizeSessionOnce = () => {
+    if (sessionFinalized) {
+      return;
+    }
+    sessionFinalized = true;
+    finalizeDispatchSession(sessionId);
+  };
+
+  const markClosed = () => {
+    streamClosed = true;
+    disconnectController.abort();
+    finalizeSessionOnce();
+  };
+
+  req.on('aborted', markClosed);
+  res.on('close', markClosed);
 
   if (useCouncil) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -228,6 +251,9 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       runSettings: { ...settings, routingMode, manualModelId: session.modelId },
       apiKey,
       onChunk: (chunk) => {
+        if (streamClosed || res.writableEnded || res.destroyed) {
+          return;
+        }
         hasStreamOutput = true;
         res.write(chunk);
         const lines = chunk.split('\n');
@@ -250,12 +276,20 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
         }
       },
       onError: (err) => {
-        finalizeDispatchSession(sessionId);
+        if (streamClosed) {
+          return;
+        }
+        finalizeSessionOnce();
         writeSseErrorFrame(res, err.message, hasStreamOutput);
-        res.end();
+        if (!res.writableEnded && !res.destroyed) {
+          res.end();
+        }
       },
       onComplete: () => {
-        finalizeDispatchSession(sessionId);
+        if (streamClosed) {
+          return;
+        }
+        finalizeSessionOnce();
         const updatedMessages = [
           ...messages,
           {
@@ -265,8 +299,11 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
           }
         ];
         ConversationStore.saveConversation(sessionId, updatedMessages);
-        res.end();
-      }
+        if (!res.writableEnded && !res.destroyed) {
+          res.end();
+        }
+      },
+      abortSignal: disconnectController.signal
     });
     return;
   }
@@ -330,6 +367,9 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
     uploadDisclosureAcknowledged: !!settings.uploadDisclosureAcknowledged,
     containsUpload: !!settings.containsUpload,
     onChunk: (chunk) => {
+      if (streamClosed || res.writableEnded || res.destroyed) {
+        return;
+      }
       hasStreamOutput = hasStreamOutput || chunk.length > 0;
       res.write(chunk);
       // Parse token from chunk to accumulate response
@@ -349,20 +389,31 @@ apiRouter.post('/dispatch', async (req: Request, res: Response) => {
       }
     },
     onError: (err) => {
-      finalizeDispatchSession(sessionId);
+      if (streamClosed) {
+        return;
+      }
+      finalizeSessionOnce();
       writeSseErrorFrame(res, err.message, hasStreamOutput);
-      res.end();
+      if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
     },
     onComplete: () => {
-      finalizeDispatchSession(sessionId);
+      if (streamClosed) {
+        return;
+      }
+      finalizeSessionOnce();
       // Save transcript
       const updatedMessages = [
         ...messages,
         { role: 'assistant', content: assistantResponse }
       ];
       ConversationStore.saveConversation(sessionId, updatedMessages);
-      res.end();
-    }
+      if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
+    },
+    abortSignal: disconnectController.signal
   });
 });
 
