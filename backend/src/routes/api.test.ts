@@ -185,4 +185,71 @@ describe('API Integration Tests', () => {
     assert.ok(streamBody.includes('Response from qwen/qwen3-coder:free'));
     assert.strictEqual(hasSessionCache(sessionBody.sessionId), false);
   });
+
+  test('POST /dispatch emits an SSE error frame after partial solo output', async () => {
+    const firstChunk = 'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n';
+    let upstreamCallCount = 0;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async (url, options: any) => {
+      if (typeof url === 'string' && url.startsWith('http://localhost:')) {
+        return originalFetch(url, options);
+      }
+
+      upstreamCallCount++;
+
+      if (upstreamCallCount === 1) {
+        return {
+          ok: true,
+          body: {
+            getReader() {
+              let readCount = 0;
+              return {
+                async read() {
+                  if (readCount === 0) {
+                    readCount++;
+                    return {
+                      value: new TextEncoder().encode(firstChunk),
+                      done: false
+                    };
+                  }
+
+                  throw new Error('mid-stream failure');
+                }
+              };
+            }
+          }
+        } as any;
+      }
+
+      throw new Error('fallback stream failure');
+    };
+
+    const sessionRes = await fetch(`http://localhost:${port}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
+    });
+    assert.strictEqual(sessionRes.status, 201);
+    const sessionBody = await sessionRes.json() as any;
+
+    const dispatchRes = await fetch(`http://localhost:${port}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer test-key' },
+      body: JSON.stringify({
+        sessionId: sessionBody.sessionId,
+        messages: [{ role: 'user', content: 'Tell me something short.' }],
+        settings: {}
+      })
+    });
+
+    assert.strictEqual(dispatchRes.status, 200);
+    const streamBody = await dispatchRes.text();
+    assert.ok(streamBody.includes('"content":"Hello"'), streamBody);
+    assert.ok(streamBody.includes('"type":"error"'), streamBody);
+    assert.ok(streamBody.includes('"message":"fallback stream failure"'), streamBody);
+    assert.ok(streamBody.includes('"partial":true'), streamBody);
+
+    globalThis.fetch = originalFetch;
+  });
 });
