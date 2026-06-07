@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { buildCorsOptions } from './config/corsOptions.js';
 import { runMigrations } from './db/migrationRunner.js';
 import { ModelPoolManager } from './modules/modelPoolManager.js';
 import { apiRouter } from './routes/api.js';
@@ -7,7 +8,7 @@ import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
 
 const app = express();
-app.use(cors());
+app.use(cors(buildCorsOptions()));
 app.use(express.json());
 
 // Mount the API routes
