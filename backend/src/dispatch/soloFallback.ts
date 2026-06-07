@@ -1,6 +1,7 @@
 import { AgentResult } from 'shared';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { dispatchSoloChat } from './soloDispatch.js';
+import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 export const DEFAULT_SOLO_FALLBACK_MODEL_ID = 'meta-llama/llama-3.3-70b-instruct:free';
 
@@ -39,7 +40,7 @@ export async function executeSoloFallback(
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'http://localhost:3000',
+        'HTTP-Referer': getOpenRouterHttpReferer(),
         'X-Title': 'FreeCouncil'
       },
       body: JSON.stringify({
