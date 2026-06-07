@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { localDB } from '../utils/db';
-import { apiClient, ModelInfo, QuotaInfo } from '../utils/api';
+import { apiClient, ModelInfo, ModelPerformanceInfo, QuotaInfo } from '../utils/api';
 import CouncilTrace from '../components/CouncilTrace';
 import AgentProgressPanel from '../components/AgentProgressPanel';
 import OnboardingModal from '../components/OnboardingModal';
@@ -79,7 +79,7 @@ export default function Home() {
   const [showPresetsPanel, setShowPresetsPanel] = useState(false);
 
   // Phase 5 Model Performance (#85)
-  const [modelPerf, setModelPerf] = useState<Array<{ modelId: string; avgScore: number; sessionCount: number; lastSeen: number }>>([]);
+  const [modelPerf, setModelPerf] = useState<ModelPerformanceInfo[]>([]);
   const [showModelPerf, setShowModelPerf] = useState(false);
 
   // Council SSE Progress State
@@ -438,8 +438,7 @@ export default function Home() {
 
   const fetchModelPerf = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/v1/model-performance');
-      if (res.ok) setModelPerf(await res.json());
+      setModelPerf(await apiClient.getModelPerformance());
     } catch { /* ignore */ }
   };
 
