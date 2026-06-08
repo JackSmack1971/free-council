@@ -6,15 +6,30 @@ import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 import { getRequestTimeoutMs } from '../config/requestTimeout.js';
 import { sanitizeErrorForLogging } from '../routes/api.js';
 
-const FALLBACK_MODELS: Record<string, string> = {
-  'inclusionai/ring-2.6-1t:free': 'openrouter/free',
-  'openrouter/owl-alpha': 'nvidia/nemotron-3-super-120b-a12b:free',
-  'qwen/qwen3-coder:free': 'poolside/laguna-m.1:free',
-  'openai/gpt-oss-120b:free': 'meta-llama/llama-3.3-70b-instruct:free',
-  'nvidia/nemotron-3-super-120b-a12b:free': 'arcee-ai/trinity-large-thinking:free',
-  'liquid/lfm-2.5-1.2b-instruct:free': 'meta-llama/llama-3.2-3b-instruct:free',
-  'nvidia/nemotron-nano-12b-v2-vl:free': 'meta-llama/llama-3.2-3b-instruct:free'
-};
+function getFallbackModels(): Record<string, string> {
+  const envJson = process.env.FALLBACK_MODELS_JSON?.trim();
+  if (envJson) {
+    try {
+      const parsed = JSON.parse(envJson) as Record<string, string>;
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      console.warn('[soloDispatch] Invalid FALLBACK_MODELS_JSON env var; using compiled defaults');
+    }
+  }
+  return {
+    'inclusionai/ring-2.6-1t:free': 'openrouter/free',
+    'openrouter/owl-alpha': 'nvidia/nemotron-3-super-120b-a12b:free',
+    'qwen/qwen3-coder:free': 'poolside/laguna-m.1:free',
+    'openai/gpt-oss-120b:free': 'meta-llama/llama-3.3-70b-instruct:free',
+    'nvidia/nemotron-3-super-120b-a12b:free': 'arcee-ai/trinity-large-thinking:free',
+    'liquid/lfm-2.5-1.2b-instruct:free': 'meta-llama/llama-3.2-3b-instruct:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free': 'meta-llama/llama-3.2-3b-instruct:free'
+  };
+}
+
+const FALLBACK_MODELS = getFallbackModels();
 
 export function limitContext(messages: any[], contextLimit: number): any[] {
   // Estimate tokens: 1 token ≈ 4 characters
@@ -371,8 +386,14 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
     } catch (err: any) {
       console.error(`[soloDispatch] Attempt ${attempts} failed:`, sanitizeErrorForLogging(err));
       if (attempts < maxAttempts) {
-        const fallback = FALLBACK_MODELS[currentModelId] || 'meta-llama/llama-3.3-70b-instruct:free';
-        console.log(`[soloDispatch] Retrying fallback: ${fallback}`);
+        const fallback = FALLBACK_MODELS[currentModelId]
+          || process.env.FINAL_FALLBACK_MODEL?.trim()
+          || 'meta-llama/llama-3.3-70b-instruct:free';
+        if (!FALLBACK_MODELS[currentModelId]) {
+          console.warn(`[soloDispatch] Fallback chain exhausted for ${currentModelId}; using last-resort model ${fallback}`);
+        } else {
+          console.log(`[soloDispatch] Retrying fallback: ${fallback}`);
+        }
         return await executeCall(fallback);
       } else {
         onError(err);

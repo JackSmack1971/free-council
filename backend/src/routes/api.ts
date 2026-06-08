@@ -77,20 +77,28 @@ const dispatchRateLimiter = createRateLimitMiddleware({
   maxRequests: 10
 });
 
-const DEFAULT_MODELS = [
-  'inclusionai/ring-2.6-1t:free',
-  'openrouter/free',
-  'openrouter/owl-alpha',
-  'nvidia/nemotron-3-super-120b-a12b:free',
-  'qwen/qwen3-coder:free',
-  'poolside/laguna-m.1:free',
-  'openai/gpt-oss-120b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'arcee-ai/trinity-large-thinking:free',
-  'liquid/lfm-2.5-1.2b-instruct:free',
-  'meta-llama/llama-3.2-3b-instruct:free',
-  'nvidia/nemotron-nano-12b-v2-vl:free'
-];
+function getDefaultModels(): string[] {
+  const envModels = process.env.DEFAULT_MODELS?.trim();
+  if (envModels) {
+    return envModels.split(',').map((m) => m.trim()).filter(Boolean);
+  }
+  return [
+    'inclusionai/ring-2.6-1t:free',
+    'openrouter/free',
+    'openrouter/owl-alpha',
+    'nvidia/nemotron-3-super-120b-a12b:free',
+    'qwen/qwen3-coder:free',
+    'poolside/laguna-m.1:free',
+    'openai/gpt-oss-120b:free',
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'arcee-ai/trinity-large-thinking:free',
+    'liquid/lfm-2.5-1.2b-instruct:free',
+    'meta-llama/llama-3.2-3b-instruct:free',
+    'nvidia/nemotron-nano-12b-v2-vl:free'
+  ];
+}
+
+const DEFAULT_MODELS = getDefaultModels();
 
 function finalizeDispatchSession(sessionId: string): void {
   clearSessionCache(sessionId);

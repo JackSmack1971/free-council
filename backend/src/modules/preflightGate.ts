@@ -51,8 +51,12 @@ export function evaluatePreflightPolicy(
   context: PreflightContext,
   dependencies: PolicyEvaluationDependencies = {}
 ): GateResult {
-  const freeLockFallbackModelId = dependencies.freeLockFallbackModelId || 'openrouter/free';
-  const aggregatorFallbackModelId = dependencies.aggregatorFallbackModelId || 'meta-llama/llama-3.3-70b-instruct:free';
+  const freeLockFallbackModelId = dependencies.freeLockFallbackModelId
+    || process.env.FREE_LOCK_FALLBACK_MODEL?.trim()
+    || 'openrouter/free';
+  const aggregatorFallbackModelId = dependencies.aggregatorFallbackModelId
+    || process.env.AGGREGATOR_FALLBACK_MODEL?.trim()
+    || 'meta-llama/llama-3.3-70b-instruct:free';
 
   if (!context.apiKeyPresent) {
     return { allowed: false, violation: 'API_KEY_MISSING' };
