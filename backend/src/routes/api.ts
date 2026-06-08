@@ -10,7 +10,13 @@ import { dispatchSoloChat } from '../dispatch/soloDispatch.js';
 import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
-import { SessionStore } from '../modules/sessionStore.js';
+import { SessionStore, SessionRecord } from '../modules/sessionStore.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { SessionRegistry, SessionState, extractBearerToken, hashApiKey } from '../modules/sessionRegistry.js';
+
+export const GENERIC_REQUEST_ERROR = 'An internal error occurred processing your request.';
+export const GENERIC_CONFIG_READ_ERROR = 'Failed to read configuration.';
+export const GENERIC_CONFIG_UPDATE_ERROR = 'Failed to update configuration.';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -98,13 +104,33 @@ function writeSseErrorFrame(res: Response, message: string, partial: boolean): v
   res.write(`data: ${JSON.stringify({ type: 'error', message, partial })}\n\n`);
 }
 
+export function sanitizeErrorForLogging(err: unknown): string {
+  if (!err) return '';
+  let msg = '';
+  if (err instanceof Error) {
+    msg = err.stack || err.message;
+  } else if (typeof err === 'object') {
+    try {
+      msg = JSON.stringify(err);
+    } catch {
+      msg = String(err);
+    }
+  } else {
+    msg = String(err);
+  }
+
+  return msg
+    .replace(/Bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer [REDACTED]')
+    .replace(/sk-[a-zA-Z0-9_\-\.]+/gi, 'sk-[REDACTED]');
+}
+
 export function reportDispatchError(
   res: Response,
   context: 'council' | 'solo',
   err: unknown,
   partial: boolean
 ): void {
-  console.error(`[dispatch:${context}] Request failed:`, err);
+  console.error(`[dispatch:${context}] Request failed:`, sanitizeErrorForLogging(err));
   writeSseErrorFrame(res, GENERIC_REQUEST_ERROR, partial);
 }
 
@@ -116,20 +142,21 @@ const requireApiKey = (req: Request, res: Response, next: () => void) => {
   next();
 };
 
-function requireOwnedSession(req: Request, res: Response, sessionId: string): SessionState | null {
+function requireOwnedSession(req: Request, res: Response, sessionId: string): SessionRecord | null {
   const apiKey = extractBearerToken(req.headers.authorization);
   if (!apiKey) {
     res.status(401).json({ error: 'API key is missing' });
     return null;
   }
 
-  const session = SessionRegistry.getSession(sessionId);
+  const session = SessionStore.getSession(sessionId);
   if (!session) {
     res.status(404).json({ error: 'Session not found' });
     return null;
   }
 
-  if (!SessionRegistry.isOwnedBy(sessionId, apiKey)) {
+  const ownerHash = hashApiKey(apiKey);
+  if (!session.ownerApiKeyHash || session.ownerApiKeyHash !== ownerHash) {
     res.status(403).json({ error: 'Forbidden' });
     return null;
   }
@@ -138,7 +165,7 @@ function requireOwnedSession(req: Request, res: Response, sessionId: string): Se
 }
 
 // POST /session
-apiRouter.post('/session', requireApiKey, (req: Request, res: Response) => {
+apiRouter.post('/session', requireApiKey, createSessionRateLimiter, (req: Request, res: Response) => {
   const { modelId, mode } = req.body;
   if (!mode || (mode !== 'solo' && mode !== 'council')) {
     return res.status(400).json({ error: 'Invalid mode. Supported modes: solo, council.' });
@@ -169,7 +196,10 @@ apiRouter.post('/session', requireApiKey, (req: Request, res: Response) => {
   }
 
   const sessionId = crypto.randomUUID();
-  SessionStore.createSession(sessionId, activeModelId, mode);
+  const apiKey = extractBearerToken(req.headers.authorization)!;
+  const ownerApiKeyHash = hashApiKey(apiKey);
+  SessionStore.createSession(sessionId, activeModelId, mode, ownerApiKeyHash);
+  SessionRegistry.createSession(sessionId, activeModelId, mode, apiKey);
 
   res.status(201).json({
     sessionId,
@@ -222,9 +252,9 @@ apiRouter.post('/dispatch', dispatchRateLimiter, async (req: Request, res: Respo
     return res.status(400).json({ error: 'Missing sessionId or messages' });
   }
 
-  const session = SessionStore.getSession(sessionId);
+  const session = requireOwnedSession(req, res, sessionId);
   if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
+    return;
   }
   SessionStore.touchSession(sessionId);
 
@@ -439,7 +469,7 @@ apiRouter.post('/dispatch', dispatchRateLimiter, async (req: Request, res: Respo
 });
 
 // GET /quota
-apiRouter.get('/quota', (req: Request, res: Response) => {
+apiRouter.get('/quota', requireApiKey, (req: Request, res: Response) => {
   try {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
@@ -485,11 +515,23 @@ apiRouter.get('/sessions', requireApiKey, (req: Request, res: Response) => {
       return res.status(401).json({ error: 'API key is missing' });
     }
 
-    const ownedSessionIds = new Set(SessionRegistry.listOwnedSessionIds(apiKey));
-    const stmt = db.prepare('SELECT id, ts FROM conversations ORDER BY ts DESC');
-    const rows = stmt.all() as { id: string; ts: number }[];
+    let limit = parseInt(String(req.query.limit || '50'), 10);
+    if (isNaN(limit) || limit <= 0) {
+      limit = 50;
+    }
+
+    const ownerHash = hashApiKey(apiKey);
+    const rows = db.prepare(`
+      SELECT c.id, c.ts
+      FROM conversations c
+      JOIN sessions s ON c.id = s.id
+      WHERE s.owner_api_key_hash = ?
+      ORDER BY c.ts DESC
+      LIMIT ?
+    `).all(ownerHash, limit) as { id: string; ts: number }[];
+
     res.json({
-      sessions: rows.filter((row) => ownedSessionIds.has(row.id))
+      sessions: rows
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to query sessions list' });
@@ -503,9 +545,9 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  const session = SessionStore.getSession(sessionId);
+  const session = requireOwnedSession(req, res, sessionId);
   if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
+    return;
   }
 
   try {
@@ -526,9 +568,7 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
 apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
   const { eventType, apiCalls, synthesisRationale } = req.body;
   const sessionId = req.params.id;
-  if (!SessionStore.getSession(sessionId)) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
+  if (!requireOwnedSession(req, res, sessionId)) return;
 
   try {
     TelemetryEngine.record({
@@ -546,7 +586,7 @@ apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
 });
 
 // GET /config
-apiRouter.get('/config', (req: Request, res: Response) => {
+apiRouter.get('/config', requireApiKey, (req: Request, res: Response) => {
   try {
     const rows = db.prepare('SELECT key, value FROM app_config').all() as { key: string; value: string }[];
     const configObj: Record<string, string> = {};
@@ -599,8 +639,12 @@ apiRouter.get('/retention-rate', (req: Request, res: Response) => {
 });
 
 // POST /config
-apiRouter.post('/config', (req: Request, res: Response) => {
+apiRouter.post('/config', requireApiKey, (req: Request, res: Response) => {
   const { default_mode, council_reevaluated_after_ts, demoted_by_retention } = req.body;
+
+  if (default_mode !== undefined && default_mode !== 'solo' && default_mode !== 'council') {
+    return res.status(400).json({ error: 'Invalid default_mode. Supported modes: solo, council.' });
+  }
   try {
     if (default_mode !== undefined) {
       db.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES ('default_mode', ?)").run(default_mode);

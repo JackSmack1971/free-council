@@ -8,7 +8,8 @@ import {
   GENERIC_CONFIG_READ_ERROR,
   GENERIC_CONFIG_UPDATE_ERROR,
   GENERIC_REQUEST_ERROR,
-  reportDispatchError
+  reportDispatchError,
+  sanitizeErrorForLogging
 } from './api.js';
 
 describe('api error handling', () => {
@@ -61,7 +62,9 @@ describe('api error handling', () => {
         throw new Error('Expected server address');
       }
 
-      const response = await fetch(`http://localhost:${addr.port}/config`);
+      const response = await fetch(`http://localhost:${addr.port}/config`, {
+        headers: { 'Authorization': 'Bearer test-key' }
+      });
       assert.equal(response.status, 500);
       const body = await response.json() as { error: string };
       assert.equal(body.error, GENERIC_CONFIG_READ_ERROR);
@@ -91,7 +94,10 @@ describe('api error handling', () => {
 
       const response = await fetch(`http://localhost:${addr.port}/config`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': 'Bearer test-key',
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({ default_mode: 'solo' })
       });
 
@@ -104,5 +110,41 @@ describe('api error handling', () => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
+  });
+
+  test('sanitizeErrorForLogging redacts Bearer tokens and sk- keys in reportDispatchError', () => {
+    const originalConsoleError = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+
+    try {
+      const complexError = new Error('Failed: Bearer sk-or-v1-abc123xyz. Another key: sk-secret456.');
+      reportDispatchError(
+        { write() {} } as unknown as express.Response,
+        'solo',
+        complexError,
+        true
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.equal(logged.length, 1);
+    const loggedString = String(logged[0][1]);
+    assert.ok(!loggedString.includes('sk-or-v1-abc123xyz'));
+    assert.ok(!loggedString.includes('sk-secret456'));
+    assert.ok(loggedString.includes('Bearer [REDACTED]'));
+    assert.ok(loggedString.includes('sk-[REDACTED]'));
+  });
+
+  test('sanitizeErrorForLogging directly redacts sensitive keys', () => {
+    const input = 'Error: API key sk-1234567890abcdef is invalid. Bearer sk-999abc.';
+    const output = sanitizeErrorForLogging(new Error(input));
+    assert.ok(!output.includes('sk-1234567890abcdef'));
+    assert.ok(!output.includes('sk-999abc'));
+    assert.ok(output.includes('sk-[REDACTED]'));
+    assert.ok(output.includes('Bearer [REDACTED]'));
   });
 });

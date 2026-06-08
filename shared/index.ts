@@ -77,6 +77,7 @@ export interface AgentResult {
   status?: 'generating' | 'evaluating' | 'completed' | 'failed';
   usedFallback?: boolean;
   fallbackReason?: string;
+  fromCache?: boolean;
 }
 
 export interface PreflightContext {

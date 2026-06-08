@@ -4,7 +4,9 @@ import { FileProcessor, UploadedFile } from '../modules/fileProcessor.js';
 import { db } from '../db/connection.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
 import { recordException } from '../db/policyExceptionsRepo.js';
-import { extractBearerToken, SessionRegistry } from '../modules/sessionRegistry.js';
+import { extractBearerToken, hashApiKey } from '../modules/sessionRegistry.js';
+import { SessionStore } from '../modules/sessionStore.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
 
 export const uploadRouter = Router();
 const uploadRateLimiter = createRateLimitMiddleware({
@@ -84,11 +86,12 @@ uploadRouter.post('/', uploadRateLimiter, async (req: Request, res: Response) =>
   if (!apiKey) {
     return res.status(401).json({ error: 'API key is missing' });
   }
-  const session = SessionRegistry.getSession(sessionId);
+  const session = SessionStore.getSession(sessionId);
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
-  if (!SessionRegistry.isOwnedBy(sessionId, apiKey)) {
+  const ownerHash = hashApiKey(apiKey);
+  if (!session.ownerApiKeyHash || session.ownerApiKeyHash !== ownerHash) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 

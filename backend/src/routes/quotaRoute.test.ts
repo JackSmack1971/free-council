@@ -34,7 +34,9 @@ describe('quota route', () => {
   test('GET /quota returns the configured daily limit', async () => {
     process.env.DAILY_API_QUOTA = '50';
 
-    const response = await fetch(`http://localhost:${port}/quota`);
+    const response = await fetch(`http://localhost:${port}/quota`, {
+      headers: { 'Authorization': 'Bearer test-key' }
+    });
     assert.strictEqual(response.status, 200);
 
     const body = await response.json() as { dailyLimit: number; isEstimated: boolean };

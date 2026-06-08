@@ -35,6 +35,7 @@ describe('api session authorization', () => {
 
   beforeEach(() => {
     SessionRegistry.clearForTests();
+    db.exec('DELETE FROM sessions');
     db.exec('DELETE FROM conversations');
     db.exec('DELETE FROM session_events');
   });
@@ -104,5 +105,124 @@ describe('api session authorization', () => {
     });
 
     assert.equal(foreignResponse.status, 403);
+  });
+
+  test('POST /dispatch requires session ownership', async () => {
+    const createResponse = await fetch(`http://localhost:${port}/session`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer owner-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ mode: 'council' })
+    });
+
+    assert.equal(createResponse.status, 201);
+    const session = await createResponse.json() as { sessionId: string };
+
+    // Missing API key
+    const noKeyResponse = await fetch(`http://localhost:${port}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId, messages: [] })
+    });
+    assert.equal(noKeyResponse.status, 401);
+
+    // Foreign API key
+    const foreignResponse = await fetch(`http://localhost:${port}/dispatch`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer foreign-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ sessionId: session.sessionId, messages: [] })
+    });
+    assert.equal(foreignResponse.status, 403);
+  });
+
+  test('PATCH /session/:id/revert requires session ownership', async () => {
+    const createResponse = await fetch(`http://localhost:${port}/session`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer owner-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ mode: 'council' })
+    });
+
+    assert.equal(createResponse.status, 201);
+    const session = await createResponse.json() as { sessionId: string };
+
+    // Missing API key
+    const noKeyResponse = await fetch(`http://localhost:${port}/session/${session.sessionId}/revert`, {
+      method: 'PATCH'
+    });
+    assert.equal(noKeyResponse.status, 401);
+
+    // Foreign API key
+    const foreignResponse = await fetch(`http://localhost:${port}/session/${session.sessionId}/revert`, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer foreign-key' }
+    });
+    assert.equal(foreignResponse.status, 403);
+
+    // Owner API key
+    const ownerResponse = await fetch(`http://localhost:${port}/session/${session.sessionId}/revert`, {
+      method: 'PATCH',
+      headers: { 'Authorization': 'Bearer owner-key' }
+    });
+    assert.equal(ownerResponse.status, 200);
+  });
+
+  test('GET /config requires an API key', async () => {
+    const noKeyResponse = await fetch(`http://localhost:${port}/config`);
+    assert.equal(noKeyResponse.status, 401);
+
+    const withKeyResponse = await fetch(`http://localhost:${port}/config`, {
+      headers: { 'Authorization': 'Bearer some-key' }
+    });
+    assert.equal(withKeyResponse.status, 200);
+  });
+
+  test('GET /quota requires an API key', async () => {
+    const noKeyResponse = await fetch(`http://localhost:${port}/quota`);
+    assert.equal(noKeyResponse.status, 401);
+
+    const withKeyResponse = await fetch(`http://localhost:${port}/quota`, {
+      headers: { 'Authorization': 'Bearer some-key' }
+    });
+    assert.equal(withKeyResponse.status, 200);
+  });
+
+  test('POST /config requires API key and validates default_mode', async () => {
+    // Missing API key
+    const noKeyResponse = await fetch(`http://localhost:${port}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ default_mode: 'solo' })
+    });
+    assert.equal(noKeyResponse.status, 401);
+
+    // Invalid default_mode
+    const invalidResponse = await fetch(`http://localhost:${port}/config`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer some-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ default_mode: 'invalid-mode' })
+    });
+    assert.equal(invalidResponse.status, 400);
+
+    // Valid default_mode
+    const validResponse = await fetch(`http://localhost:${port}/config`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer some-key',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ default_mode: 'solo' })
+    });
+    assert.equal(validResponse.status, 200);
   });
 });

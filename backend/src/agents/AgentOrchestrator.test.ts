@@ -293,4 +293,75 @@ describe('AgentOrchestrator tests', () => {
     assert.ok(row);
     assert.strictEqual(row.synthesis_rationale, 'double_timeout');
   });
+
+  test('Proposer caching: uses SHA-256 and returns fromCache correctly', async () => {
+    const plan: AgentPlan = {
+      executionMode: 'goa_moa_hybrid',
+      totalApiCalls: 4,
+      samplingRationale: 'Caching test',
+      agents: [
+        { role: 'Proposer1', modelId: 'model-a' },
+        { role: 'Proposer2', modelId: 'model-a' }
+      ]
+    };
+
+    const sessionId = 'test-session-cache-' + Date.now();
+    const prompt = 'Hello cache world';
+
+    let fetchCount = 0;
+    globalThis.fetch = async (url: any, init: any) => {
+      fetchCount++;
+      const body = JSON.parse(init.body);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: `Response for ${body.model} on prompt: ${body.messages[0].content}`
+              }
+            }
+          ]
+        })
+      } as Response;
+    };
+
+    // First call: should be cache miss
+    const generator1 = AgentOrchestrator.executeGoAMoAHybrid(plan, prompt, 'dummy-key', sessionId);
+    const results1: AgentResult[] = [];
+    for await (const chunk of generator1) {
+      results1.push(chunk);
+    }
+
+    const completed1 = results1.filter(r => r.role.startsWith('Proposer') && r.status === 'completed');
+    assert.strictEqual(completed1.length, 2);
+    assert.strictEqual(completed1[0].fromCache, false);
+    assert.strictEqual(completed1[1].fromCache, false);
+    assert.strictEqual(fetchCount, 3); // 2 proposers + 1 aggregator
+
+    // Second call: should be cache hit
+    const generator2 = AgentOrchestrator.executeGoAMoAHybrid(plan, prompt, 'dummy-key', sessionId);
+    const results2: AgentResult[] = [];
+    for await (const chunk of generator2) {
+      results2.push(chunk);
+    }
+    const completed2 = results2.filter(r => r.role.startsWith('Proposer') && r.status === 'completed');
+    assert.strictEqual(completed2.length, 2);
+    assert.strictEqual(completed2[0].fromCache, true);
+    assert.strictEqual(completed2[1].fromCache, true);
+    assert.strictEqual(fetchCount, 4); // 0 proposer + 1 aggregator
+
+    // Third call: different prompt, should be cache miss
+    const prompt2 = 'Hello cache world 2';
+    const generator3 = AgentOrchestrator.executeGoAMoAHybrid(plan, prompt2, 'dummy-key', sessionId);
+    const results3: AgentResult[] = [];
+    for await (const chunk of generator3) {
+      results3.push(chunk);
+    }
+    const completed3 = results3.filter(r => r.role.startsWith('Proposer') && r.status === 'completed');
+    assert.strictEqual(completed3.length, 2);
+    assert.strictEqual(completed3[0].fromCache, false);
+    assert.strictEqual(completed3[1].fromCache, false);
+    assert.strictEqual(fetchCount, 7); // 2 proposers + 1 aggregator
+  });
 });

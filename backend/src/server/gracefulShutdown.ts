@@ -3,6 +3,7 @@ import { Server } from 'http';
 interface ShutdownDeps {
   server: Pick<Server, 'close'>;
   retentionMonitor: { stop: () => void };
+  providerHealthMonitor?: { stop: () => void };
   checkpointDatabase: () => void;
   closeDatabase: () => void;
   processRef?: Pick<NodeJS.Process, 'on' | 'off'>;
@@ -14,6 +15,7 @@ interface ShutdownDeps {
 export function installGracefulShutdown({
   server,
   retentionMonitor,
+  providerHealthMonitor,
   checkpointDatabase,
   closeDatabase,
   processRef = process,
@@ -31,6 +33,7 @@ export function installGracefulShutdown({
 
     logger.log(`[Shutdown] Received ${signal}. Starting graceful shutdown.`);
     retentionMonitor.stop();
+    providerHealthMonitor?.stop();
 
     try {
       checkpointDatabase();

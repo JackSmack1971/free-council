@@ -6,6 +6,7 @@ export interface SessionRecord {
   mode: string;
   createdAt: number;
   lastActivity: number;
+  ownerApiKeyHash?: string | null;
 }
 
 interface SessionRow {
@@ -14,6 +15,7 @@ interface SessionRow {
   mode: string;
   created_at: number;
   last_activity: number;
+  owner_api_key_hash?: string | null;
 }
 
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -29,29 +31,37 @@ function mapSessionRow(row: SessionRow | undefined): SessionRecord | null {
     modelId: row.model_id,
     mode: row.mode,
     createdAt: row.created_at,
-    lastActivity: row.last_activity
+    lastActivity: row.last_activity,
+    ownerApiKeyHash: row.owner_api_key_hash ?? null
   };
 }
 
 export const SessionStore = {
-  createSession(sessionId: string, modelId: string, mode: string, now = Date.now()): SessionRecord {
+  createSession(
+    sessionId: string,
+    modelId: string,
+    mode: string,
+    ownerApiKeyHash: string | null = null,
+    now = Date.now()
+  ): SessionRecord {
     db.prepare(`
-      INSERT INTO sessions (id, model_id, mode, created_at, last_activity)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(sessionId, modelId, mode, now, now);
+      INSERT INTO sessions (id, model_id, mode, created_at, last_activity, owner_api_key_hash)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sessionId, modelId, mode, now, now, ownerApiKeyHash);
 
     return {
       sessionId,
       modelId,
       mode,
       createdAt: now,
-      lastActivity: now
+      lastActivity: now,
+      ownerApiKeyHash
     };
   },
 
   getSession(sessionId: string): SessionRecord | null {
     const row = db.prepare(`
-      SELECT id, model_id, mode, created_at, last_activity
+      SELECT id, model_id, mode, created_at, last_activity, owner_api_key_hash
       FROM sessions
       WHERE id = ?
     `).get(sessionId) as SessionRow | undefined;
@@ -84,6 +94,6 @@ export const SessionStore = {
       WHERE last_activity < ?
     `).run(cutoffTs);
 
-    return result.changes;
+    return Number(result.changes);
   }
 };

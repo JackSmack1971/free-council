@@ -10,9 +10,11 @@ import { resetRateLimitersForTest } from '../middleware/rateLimit.js';
 import { db } from '../db/connection.js';
 import { FileProcessor } from '../modules/fileProcessor.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
+import { SessionRegistry, hashApiKey } from '../modules/sessionRegistry.js';
+import { SessionStore } from '../modules/sessionStore.js';
 
-function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): Buffer {
-  return Buffer.from(
+function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): ArrayBuffer {
+  const body = Buffer.from(
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
     `Content-Type: ${mimeType}\r\n\r\n` +
@@ -20,6 +22,7 @@ function buildMultipartBody(boundary: string, filename: string, mimeType: string
     `--${boundary}--\r\n`,
     'utf8'
   );
+  return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
 }
 
 describe('rate limit integration', () => {
@@ -88,6 +91,8 @@ describe('rate limit integration', () => {
 
   beforeEach(() => {
     resetRateLimitersForTest();
+    SessionRegistry.clearForTests();
+    db.exec('DELETE FROM sessions');
     db.exec('DELETE FROM policy_exceptions');
     db.exec('DELETE FROM uploaded_file_chunks_fts');
     db.exec('DELETE FROM uploaded_file_chunks');
@@ -115,7 +120,10 @@ describe('rate limit integration', () => {
     for (let i = 0; i < 20; i++) {
       const response = await fetch(`http://localhost:${apiPort}/session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer rate-limit-test-key'
+        },
         body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
       });
       assert.strictEqual(response.status, 201);
@@ -123,7 +131,10 @@ describe('rate limit integration', () => {
 
     const limited = await fetch(`http://localhost:${apiPort}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer rate-limit-test-key'
+      },
       body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
     });
 
@@ -134,7 +145,10 @@ describe('rate limit integration', () => {
   test('POST /dispatch returns 429 with Retry-After after 10 requests per API key per minute', async () => {
     const sessionRes = await fetch(`http://localhost:${apiPort}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer dispatch-test-key'
+      },
       body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
     });
     const sessionBody = await sessionRes.json() as { sessionId: string };
@@ -160,6 +174,11 @@ describe('rate limit integration', () => {
 
   test('POST /upload returns 429 with Retry-After after 5 requests per API key per minute', async () => {
     const sessionId = 'upload-rate-limit-session';
+    const apiKey = 'upload-test-key';
+    const hash = hashApiKey(apiKey);
+    SessionStore.createSession(sessionId, 'openai/gpt-oss-120b:free', 'solo', hash);
+    SessionRegistry.createSession(sessionId, 'openai/gpt-oss-120b:free', 'solo', apiKey);
+
     db.prepare(`
       INSERT INTO policy_exceptions
       (ts, violation_type, model_id, user_action, session_id, details_json, previous_hash, hash)
@@ -173,7 +192,7 @@ describe('rate limit integration', () => {
       const response = await fetch(`http://localhost:${uploadPort}/upload?sessionId=${sessionId}`, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer upload-test-key',
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': `multipart/form-data; boundary=${boundary}`
         },
         body: buildMultipartBody(boundary, `notes-${i}.txt`, 'text/plain', 'hello world')
@@ -184,7 +203,7 @@ describe('rate limit integration', () => {
     const limited = await fetch(`http://localhost:${uploadPort}/upload?sessionId=${sessionId}`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer upload-test-key',
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
       body: buildMultipartBody(boundary, 'notes-6.txt', 'text/plain', 'hello world')

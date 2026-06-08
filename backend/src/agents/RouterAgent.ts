@@ -111,7 +111,7 @@ export class RouterAgent {
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.0
           }),
-          signal: abortSignal
+          signal: AbortSignal.timeout(timeoutMs)
         });
 
         if (!response.ok) {

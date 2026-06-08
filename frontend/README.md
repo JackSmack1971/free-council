@@ -1,36 +1,36 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frontend
 
-## Getting Started
+This package contains the Next.js UI for FreeCouncil.
 
-First, run the development server:
+## What It Does
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Renders the chat interface and routing controls.
+- Persists browser preferences locally through IndexedDB with localStorage fallback.
+- Calls the backend API through `frontend/src/utils/api.ts`.
+- Displays model metadata, council traces, onboarding, and upload prompts.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Key Files
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `src/app/page.tsx` - main application screen.
+- `src/app/layout.tsx` - root layout and metadata.
+- `src/components/` - council trace, agent progress, and onboarding UI.
+- `src/utils/api.ts` - API client and API base resolution.
+- `src/utils/db.ts` - browser persistence helper.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+- `npm run dev` - start the Next.js dev server.
+- `npm run build` - build the frontend.
+- `npm run start` - start the production server.
+- `npm run lint` - run ESLint.
 
-To learn more about Next.js, take a look at the following resources:
+## Configuration
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The frontend reads `NEXT_PUBLIC_API_URL` to find the backend API. If it is not set, development
+defaults to `http://localhost:3001/api/v1` and production defaults to `/api/v1`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Testing
 
-## Deploy on Vercel
+There is a colocated test file at `src/utils/api.test.ts`. The package does not currently define a
+dedicated `test` script, so use `npm run build` and `npm run lint` as the standard checks.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

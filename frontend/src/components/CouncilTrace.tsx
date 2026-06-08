@@ -7,6 +7,7 @@ interface TraceAgent {
   isPrimary: boolean;
   usedFallback?: boolean;
   fallbackReason?: string;
+  fromCache?: boolean;
 }
 
 interface TraceInfo {
@@ -106,6 +107,11 @@ export default function CouncilTrace({ trace, onSwitchMode }: CouncilTraceProps)
                         <span className="text-[10px] text-neutral-500 font-mono">{agent.modelId.split('/').pop()}</span>
                       </div>
                       <div className="flex flex-wrap gap-1">
+                        {agent.fromCache && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-600/20 text-violet-300 border border-violet-500/30 font-bold tracking-tight uppercase">
+                            cached
+                          </span>
+                        )}
                         {getCapabilities(agent.modelId).map(cap => (
                           <span key={cap} className="text-[9px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 font-bold uppercase">
                             {cap}
@@ -223,6 +229,11 @@ export default function CouncilTrace({ trace, onSwitchMode }: CouncilTraceProps)
                             {agent.isPrimary && (
                               <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-violet-600/20 text-violet-300 border border-violet-500/30 font-bold tracking-tight uppercase">
                                 Primary
+                              </span>
+                            )}
+                            {agent.fromCache && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-violet-600/20 text-violet-300 border border-violet-500/30 font-bold tracking-tight uppercase">
+                                cached
                               </span>
                             )}
                           </div>

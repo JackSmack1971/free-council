@@ -7,6 +7,7 @@ import { apiRouter } from './routes/api.js';
 import { uploadRouter } from './routes/upload.js';
 import { RetentionMonitor } from './modules/retentionMonitor.js';
 import { SessionCleanupMonitor } from './modules/sessionCleanupMonitor.js';
+import { ProviderHealthMonitor } from './modules/providerHealthMonitor.js';
 import { resolvePort } from './config/port.js';
 import { configureConsoleLogging } from './config/logger.js';
 import { closeDatabase, checkpointDatabase } from './db/connection.js';
@@ -51,11 +52,13 @@ async function startServer() {
     // Start retention monitoring (every 60 seconds)
     RetentionMonitor.start();
     SessionCleanupMonitor.start();
+    ProviderHealthMonitor.start();
   });
 
   installGracefulShutdown({
     server,
     retentionMonitor: RetentionMonitor,
+    providerHealthMonitor: ProviderHealthMonitor,
     checkpointDatabase,
     closeDatabase
   });

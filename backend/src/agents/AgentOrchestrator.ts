@@ -1,4 +1,5 @@
 import { AgentPlan, AgentResult, AgentAssignment } from 'shared';
+import crypto from 'node:crypto';
 import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { renderAggregatorPrompt } from './moa/index.js';
@@ -10,9 +11,7 @@ import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 const proposerCache = new Map<string, Map<string, string>>();
 
 function getCacheKey(modelId: string, prompt: string): string {
-  // Simple hash: length + first 100 chars + last 100 chars
-  const normalized = prompt.trim();
-  const hash = `${normalized.length}:${normalized.slice(0, 100)}:${normalized.slice(-100)}`;
+  const hash = crypto.createHash('sha256').update(prompt).digest('hex');
   return `${modelId}|${hash}`;
 }
 
@@ -214,7 +213,7 @@ export const AgentOrchestrator = {
       if (outcome.error) {
         yield { role: outcome.agent.role, modelId: outcome.agent.modelId, response: '', status: 'failed', error: outcome.error };
       } else {
-        yield { role: outcome.agent.role, modelId: outcome.agent.modelId, response: outcome.text, status: 'completed' };
+        yield { role: outcome.agent.role, modelId: outcome.agent.modelId, response: outcome.text, status: 'completed', fromCache: outcome.fromCache };
       }
     }
 

@@ -7,7 +7,8 @@ import { db } from '../db/connection.js';
 import { runMigrations } from '../db/migrationRunner.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
 import { FileProcessor } from '../modules/fileProcessor.js';
-import { SessionRegistry } from '../modules/sessionRegistry.js';
+import { SessionRegistry, hashApiKey } from '../modules/sessionRegistry.js';
+import { SessionStore } from '../modules/sessionStore.js';
 import { uploadRouter } from './upload.js';
 
 function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): Buffer {
@@ -50,6 +51,7 @@ describe('upload authorization', () => {
 
   beforeEach(() => {
     SessionRegistry.clearForTests();
+    db.exec('DELETE FROM sessions');
     db.exec('DELETE FROM uploaded_file_chunks_fts');
     db.exec('DELETE FROM uploaded_file_chunks');
     db.exec('DELETE FROM uploaded_files');
@@ -66,6 +68,7 @@ describe('upload authorization', () => {
 
   test('POST /upload rejects non-owner API keys', async () => {
     const sessionId = 'session-upload-authz';
+    SessionStore.createSession(sessionId, 'openrouter/free', 'council', hashApiKey('owner-key'));
     SessionRegistry.createSession(sessionId, 'openrouter/free', 'council', 'owner-key');
     db.prepare(`
       INSERT INTO policy_exceptions

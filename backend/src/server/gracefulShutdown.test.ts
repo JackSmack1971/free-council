@@ -21,6 +21,11 @@ describe('gracefulShutdown', () => {
           calls.push('retention.stop');
         }
       },
+      providerHealthMonitor: {
+        stop() {
+          calls.push('providerHealth.stop');
+        }
+      },
       checkpointDatabase() {
         calls.push('db.checkpoint');
       },
@@ -54,6 +59,7 @@ describe('gracefulShutdown', () => {
 
     assert.deepStrictEqual(calls, [
       'retention.stop',
+      'providerHealth.stop',
       'db.checkpoint',
       'server.close',
       'db.close'

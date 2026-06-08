@@ -16,7 +16,7 @@ describe('SessionStore', () => {
   });
 
   test('persists and reloads session metadata from SQLite', () => {
-    const created = SessionStore.createSession('session-1', 'openai/gpt-oss-120b:free', 'solo', 1000);
+    const created = SessionStore.createSession('session-1', 'openai/gpt-oss-120b:free', 'solo', null, 1000);
 
     const loaded = SessionStore.getSession(created.sessionId);
 
@@ -24,8 +24,8 @@ describe('SessionStore', () => {
   });
 
   test('removes expired sessions during cleanup', () => {
-    SessionStore.createSession('stale-session', 'openai/gpt-oss-120b:free', 'solo', 1000);
-    SessionStore.createSession('fresh-session', 'openai/gpt-oss-120b:free', 'solo', 5000);
+    SessionStore.createSession('stale-session', 'openai/gpt-oss-120b:free', 'solo', null, 1000);
+    SessionStore.createSession('fresh-session', 'openai/gpt-oss-120b:free', 'solo', null, 5000);
     SessionStore.touchSession('fresh-session', 5000 + SESSION_TTL_MS - 1);
 
     const deleted = SessionCleanupMonitor.runOnce(1000 + SESSION_TTL_MS + 1, SESSION_TTL_MS);

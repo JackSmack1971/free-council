@@ -180,31 +180,45 @@ describe('RouterAgent GoA sampling tests', () => {
   });
 
   test('should abort hung router calls after timeout and fallback safely', async () => {
+    const originalTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = () => {
+      const controller = new AbortController();
+      controller.abort(new DOMException('The operation was aborted.', 'AbortError'));
+      return controller.signal;
+    };
+
     globalThis.fetch = async (_url: any, init: any) => {
       return await new Promise((_resolve, reject) => {
-        init.signal.addEventListener('abort', () => {
+        if (init.signal?.aborted) {
+          return reject(new DOMException('The operation was aborted.', 'AbortError'));
+        }
+        init.signal?.addEventListener('abort', () => {
           reject(new DOMException('The operation was aborted.', 'AbortError'));
         }, { once: true });
       });
     };
 
-    const startedAt = Date.now();
-    const plan = await RouterAgent.sampleAgents(
-      'some query',
-      dummyModels,
-      3,
-      'dummy-key',
-      false,
-      'Balanced',
-      'non_trivial',
-      true,
-      false,
-      10
-    );
-    const elapsedMs = Date.now() - startedAt;
+    try {
+      const startedAt = Date.now();
+      const plan = await RouterAgent.sampleAgents(
+        'some query',
+        dummyModels,
+        3,
+        'dummy-key',
+        false,
+        'Balanced',
+        'non_trivial',
+        true,
+        false,
+        10
+      );
+      const elapsedMs = Date.now() - startedAt;
 
-    assert.ok(elapsedMs < 500, `Expected timeout fallback quickly, elapsed=${elapsedMs}ms`);
-    assert.ok(plan.agents.length > 0);
-    assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
+      assert.ok(elapsedMs < 500, `Expected timeout fallback quickly, elapsed=${elapsedMs}ms`);
+      assert.ok(plan.agents.length > 0);
+      assert.strictEqual(plan.executionMode, 'goa_moa_hybrid');
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
   });
 });

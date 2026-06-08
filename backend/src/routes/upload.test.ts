@@ -7,9 +7,11 @@ import { runMigrations } from '../db/migrationRunner.js';
 import { db } from '../db/connection.js';
 import { FileProcessor } from '../modules/fileProcessor.js';
 import { FtsSearchService } from '../db/ftsSearchService.js';
+import { SessionRegistry, hashApiKey } from '../modules/sessionRegistry.js';
+import { SessionStore } from '../modules/sessionStore.js';
 
-function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): Buffer {
-  return Buffer.from(
+function buildMultipartBody(boundary: string, filename: string, mimeType: string, content: string): ArrayBuffer {
+  const body = Buffer.from(
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
     `Content-Type: ${mimeType}\r\n\r\n` +
@@ -17,6 +19,7 @@ function buildMultipartBody(boundary: string, filename: string, mimeType: string
     `--${boundary}--\r\n`,
     'utf8'
   );
+  return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
 }
 
 describe('uploadRouter', () => {
@@ -45,6 +48,8 @@ describe('uploadRouter', () => {
   });
 
   beforeEach(() => {
+    SessionRegistry.clearForTests();
+    db.exec('DELETE FROM sessions');
     db.exec('DELETE FROM uploaded_file_chunks_fts');
     db.exec('DELETE FROM uploaded_file_chunks');
     db.exec('DELETE FROM uploaded_files');
@@ -61,6 +66,11 @@ describe('uploadRouter', () => {
 
   test('removes uploaded_files metadata when FTS indexing fails', async () => {
     const sessionId = 'session-upload-failure';
+    const apiKey = 'test-owner-key';
+    const hash = hashApiKey(apiKey);
+    SessionStore.createSession(sessionId, 'openrouter/free', 'council', hash);
+    SessionRegistry.createSession(sessionId, 'openrouter/free', 'council', apiKey);
+
     db.prepare(`
       INSERT INTO policy_exceptions
       (ts, violation_type, model_id, user_action, session_id, details_json, previous_hash, hash)
@@ -83,6 +93,7 @@ describe('uploadRouter', () => {
     const response = await fetch(`http://localhost:${port}/upload?sessionId=${sessionId}`, {
       method: 'POST',
       headers: {
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': `multipart/form-data; boundary=${boundary}`
       },
       body: buildMultipartBody(boundary, 'notes.txt', 'text/plain', 'hello world')
@@ -90,7 +101,7 @@ describe('uploadRouter', () => {
 
     assert.strictEqual(response.status, 500);
     const body = await response.json() as { error: string };
-    assert.match(body.error, /Simulated indexing failure/);
+    assert.match(body.error, /File processing failed/);
 
     const storedFiles = db.prepare('SELECT id FROM uploaded_files WHERE session_id = ?').all(sessionId) as Array<{ id: string }>;
     assert.strictEqual(storedFiles.length, 0);

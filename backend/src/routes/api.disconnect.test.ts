@@ -77,8 +77,11 @@ describe('api disconnect handling', () => {
 
     const sessionRes = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'council' })
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-key'
+      },
+      body: JSON.stringify({ mode: 'solo', modelId: 'openai/gpt-oss-120b:free' })
     });
     assert.strictEqual(sessionRes.status, 201);
     const sessionBody = await sessionRes.json() as any;
@@ -91,7 +94,6 @@ describe('api disconnect handling', () => {
         sessionId: sessionBody.sessionId,
         messages: [{ role: 'user', content: 'Keep streaming until I disconnect.' }],
         settings: {
-          systemMode: 'council',
           privacyDisclosureAcknowledged: true
         }
       }),

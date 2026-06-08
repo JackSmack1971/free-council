@@ -4,6 +4,7 @@ import { TelemetryEngine } from '../modules/telemetryEngine.js';
 import { ModelPoolManager } from '../modules/modelPoolManager.js';
 import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 import { getRequestTimeoutMs } from '../config/requestTimeout.js';
+import { sanitizeErrorForLogging } from '../routes/api.js';
 
 const FALLBACK_MODELS: Record<string, string> = {
   'inclusionai/ring-2.6-1t:free': 'openrouter/free',
@@ -368,7 +369,7 @@ export async function dispatchSoloChat(options: DispatchOptions): Promise<void> 
       onComplete();
       return true;
     } catch (err: any) {
-      console.error(`[soloDispatch] Attempt ${attempts} failed:`, err.message || err);
+      console.error(`[soloDispatch] Attempt ${attempts} failed:`, sanitizeErrorForLogging(err));
       if (attempts < maxAttempts) {
         const fallback = FALLBACK_MODELS[currentModelId] || 'meta-llama/llama-3.3-70b-instruct:free';
         console.log(`[soloDispatch] Retrying fallback: ${fallback}`);

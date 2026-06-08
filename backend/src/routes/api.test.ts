@@ -72,7 +72,10 @@ describe('API Integration Tests', () => {
     // Invalid modelId
     const resInvalid = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-key'
+      },
       body: JSON.stringify({ modelId: 'non-existent-model', mode: 'solo' })
     });
     assert.strictEqual(resInvalid.status, 400);
@@ -80,7 +83,10 @@ describe('API Integration Tests', () => {
     // Valid modelId
     const resValid = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-key'
+      },
       body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
     });
     assert.strictEqual(resValid.status, 201);
@@ -106,7 +112,9 @@ describe('API Integration Tests', () => {
   });
 
   test('GET /quota should return consumption metrics', async () => {
-    const res = await fetch(`http://localhost:${port}/quota`);
+    const res = await fetch(`http://localhost:${port}/quota`, {
+      headers: { 'Authorization': 'Bearer test-key' }
+    });
     assert.strictEqual(res.status, 200);
     const body = await res.json() as any;
     assert.ok(typeof body.usedToday === 'number');
@@ -161,7 +169,10 @@ describe('API Integration Tests', () => {
 
     const sessionRes = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-key'
+      },
       body: JSON.stringify({ mode: 'council' })
     });
     assert.strictEqual(sessionRes.status, 201);
@@ -227,7 +238,10 @@ describe('API Integration Tests', () => {
 
     const sessionRes = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer test-key'
+      },
       body: JSON.stringify({ modelId: 'openai/gpt-oss-120b:free', mode: 'solo' })
     });
     assert.strictEqual(sessionRes.status, 201);

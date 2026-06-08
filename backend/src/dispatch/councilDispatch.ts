@@ -97,10 +97,10 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
     const containsUpload = !!runSettings.containsUpload;
     const freeLockEnabled = runSettings.freeLockEnabled !== false;
     const budgetEscalated = !!runSettings.budgetEscalated;
-      const plan = await RouterAgent.sampleAgents(
+    const plan = await RouterAgent.sampleAgents(
       query, freeModels, k, apiKey, containsUpload,
       effort, promptClass === 'complex' ? 'non_trivial' : 'simple',
-      freeLockEnabled, budgetEscalated, abortSignal
+      freeLockEnabled, budgetEscalated
     );
     plan.reasoningEffort = effort as 'Fast' | 'Balanced' | 'Deep' | 'Adaptive';
 
@@ -288,7 +288,8 @@ export async function dispatchCouncilChat(options: CouncilDispatchOptions): Prom
           sScore: r.sScore,
           isPrimary: r.role === primaryResult?.role,
           usedFallback: r.usedFallback,
-          fallbackReason: r.fallbackReason
+          fallbackReason: r.fallbackReason,
+          fromCache: r.fromCache
         })),
         samplingRationale: plan.samplingRationale,
         totalApiCalls: plan.totalApiCalls,
