@@ -14,39 +14,48 @@ function reserveEventTimestamp(sessionId: string, requestedTs?: number): number 
 export const TelemetryEngine = {
   record(event: SessionEvent): void {
     const ts = reserveEventTimestamp(event.session_id, event.ts);
-    try {
-      const stmt = db.prepare(`
-        INSERT INTO session_events (
-          session_id,
-          event_type,
-          agent_count,
-          api_calls,
-          edge_matrix_json,
-          layer_count,
-          proposer_models_json,
-          aggregation_calls,
-          synthesis_rationale,
-          synthesis_quality,
-          ts
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+    const maxAttempts = 3;
 
-      stmt.run(
-        event.session_id,
-        event.event_type,
-        event.agent_count ?? null,
-        event.api_calls ?? null,
-        event.edge_matrix_json ?? null,
-        event.layer_count ?? null,
-        event.proposer_models_json ?? null,
-        event.aggregation_calls ?? null,
-        event.synthesis_rationale ?? null,
-        event.synthesis_quality ?? null,
-        ts
-      );
-      console.log(`[TelemetryEngine] Recorded event '${event.event_type}' for session '${event.session_id}'`);
-    } catch (err) {
-      console.error(`[TelemetryEngine] Failed to record event:`, err);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const stmt = db.prepare(`
+          INSERT INTO session_events (
+            session_id,
+            event_type,
+            agent_count,
+            api_calls,
+            edge_matrix_json,
+            layer_count,
+            proposer_models_json,
+            aggregation_calls,
+            synthesis_rationale,
+            synthesis_quality,
+            ts
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run(
+          event.session_id,
+          event.event_type,
+          event.agent_count ?? null,
+          event.api_calls ?? null,
+          event.edge_matrix_json ?? null,
+          event.layer_count ?? null,
+          event.proposer_models_json ?? null,
+          event.aggregation_calls ?? null,
+          event.synthesis_rationale ?? null,
+          event.synthesis_quality ?? null,
+          ts
+        );
+        console.log(`[TelemetryEngine] Recorded event '${event.event_type}' for session '${event.session_id}'`);
+        return;
+      } catch (err) {
+        if (attempt < maxAttempts) {
+          console.warn(`[TelemetryEngine] Insert failed (attempt ${attempt}/${maxAttempts}), retrying: ${err}`);
+        } else {
+          console.error(`[TelemetryEngine] Failed to record event after ${maxAttempts} attempts:`, err);
+        }
+      }
     }
   },
 
