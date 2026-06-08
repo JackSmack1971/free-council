@@ -8,6 +8,7 @@ import { getOpenRouterHttpReferer } from '../config/openRouterHeaders.js';
 
 // In-memory proposer response cache, keyed by (modelId + "|" + promptHash), scoped per session
 const proposerCache = new Map<string, Map<string, string>>();
+const MAX_PROPOSER_CACHE_SESSIONS = 500;
 
 function getCacheKey(modelId: string, prompt: string): string {
   // Simple hash: length + first 100 chars + last 100 chars
@@ -18,6 +19,12 @@ function getCacheKey(modelId: string, prompt: string): string {
 
 function getSessionCache(sessionId: string): Map<string, string> {
   if (!proposerCache.has(sessionId)) {
+    if (proposerCache.size >= MAX_PROPOSER_CACHE_SESSIONS) {
+      const oldestKey = proposerCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        proposerCache.delete(oldestKey);
+      }
+    }
     proposerCache.set(sessionId, new Map());
   }
   return proposerCache.get(sessionId)!;
