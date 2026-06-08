@@ -11,6 +11,12 @@ import { dispatchCouncilChat } from '../dispatch/councilDispatch.js';
 import { db } from '../db/connection.js';
 import { getDailyApiQuotaLimit } from '../config/dailyQuota.js';
 import { SessionStore } from '../modules/sessionStore.js';
+import { createRateLimitMiddleware } from '../middleware/rateLimit.js';
+import { SessionRegistry, SessionState, extractBearerToken } from '../modules/sessionRegistry.js';
+
+export const GENERIC_REQUEST_ERROR = 'An internal error occurred processing your request.';
+export const GENERIC_CONFIG_READ_ERROR = 'Failed to read configuration.';
+export const GENERIC_CONFIG_UPDATE_ERROR = 'Failed to update configuration.';
 
 // Lightweight JSON schema validation (subset — validates type, required, properties)
 function validateJsonSchema(data: any, schema: any): Array<{ path: string; message: string }> {
@@ -177,7 +183,9 @@ apiRouter.post('/session', requireApiKey, (req: Request, res: Response) => {
   }
 
   const sessionId = crypto.randomUUID();
+  const apiKey = extractBearerToken(req.headers.authorization)!;
   SessionStore.createSession(sessionId, activeModelId, mode);
+  SessionRegistry.createSession(sessionId, activeModelId, mode, apiKey);
 
   res.status(201).json({
     sessionId,
@@ -534,9 +542,7 @@ apiRouter.patch('/session/:id/revert', (req: Request, res: Response) => {
 apiRouter.post('/session/:id/event', (req: Request, res: Response) => {
   const { eventType, apiCalls, synthesisRationale } = req.body;
   const sessionId = req.params.id;
-  if (!SessionStore.getSession(sessionId)) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
+  if (!requireOwnedSession(req, res, sessionId)) return;
 
   try {
     TelemetryEngine.record({

@@ -84,6 +84,6 @@ export const SessionStore = {
       WHERE last_activity < ?
     `).run(cutoffTs);
 
-    return result.changes;
+    return Number(result.changes);
   }
 };
