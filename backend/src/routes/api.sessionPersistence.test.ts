@@ -40,7 +40,7 @@ describe('api session persistence', () => {
   test('POST /session persists council sessions in SQLite', async () => {
     const response = await fetch(`http://localhost:${port}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer test-api-key' },
       body: JSON.stringify({ mode: 'council' })
     });
 
